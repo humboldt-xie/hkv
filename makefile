@@ -1,4 +1,4 @@
-all: proto/kv.pb.go hkv
+all: proto/kv.pb.go  hkv 
 
 test: *.go
 	go test ./

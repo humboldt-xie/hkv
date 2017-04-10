@@ -33,3 +33,26 @@ message SetReply{
 message GetReply {
 	string Value = 1;
 }
+
+
+
+//  data service 
+service Data{
+	rpc Mirror(stream MirrorRequest) returns (stream MirrorResponse) {}
+}
+
+message Dataset {
+	string Name=1;
+	int64 Sequence=2;
+}
+
+message MirrorRequest {
+	string Addr =1;
+	map<string,Dataset> Dataset=2;
+}
+
+message MirrorResponse {
+	string Command =1;
+	string Dataset =2;
+	Item   item =3;
+}

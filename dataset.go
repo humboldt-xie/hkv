@@ -18,7 +18,8 @@ type Dataset struct {
 	Name     []byte
 	Status   string
 	Sequence int64
-	migrater Mirror
+	//migrater Mirror
+	mirror Mirror
 }
 
 func (ds *Dataset) RawKey(key []byte) []byte {
@@ -43,10 +44,13 @@ func (ds *Dataset) Sync(item Item) error {
 }
 
 func (ds *Dataset) Set(key []byte, value []byte) error {
+	ds.mu.Lock()
 	ds.Sequence += 1
 	item := Item{Sequence: ds.Sequence, Key: key, Value: value}
-	if ds.migrater != nil {
-		ds.migrater.Sync(item)
+	mirror := ds.mirror
+	ds.mu.Unlock()
+	if mirror != nil {
+		mirror.Sync(item)
 	}
 	return DB.Put(ds.Key(key), value, nil)
 }
@@ -77,9 +81,14 @@ func (ds *Dataset) Clean() error {
 	return nil
 }
 
-func (ds *Dataset) Migrating() error {
+func (ds *Dataset) SyncTo(sequence int64, mirror Mirror) error {
+	return nil
+}
+
+func (ds *Dataset) CopyTo(mirror Mirror) error {
 	//ds.SetStatus(STATUS_MIGRATING)
-	ds.migrater.SetStatus(STATUS_IMPORTING)
+	ds.mirror = mirror
+	ds.mirror.SetStatus(STATUS_IMPORTING)
 	iter := DB.NewIterator(nil, nil)
 	for ok := iter.Seek(ds.Name); ok; iter.Next() {
 		// Remember that the contents of the returned slice should not be modified, and
@@ -90,12 +99,35 @@ func (ds *Dataset) Migrating() error {
 		}
 		value := iter.Value()
 		item := Item{Sequence: ds.Sequence, Key: ds.RawKey(key), Value: value}
-		ds.migrater.Copy(item)
+		ds.mirror.Copy(item)
 	}
 	iter.Release()
-	ds.migrater.SetStatus(STATUS_NODE)
+	ds.mirror.SetStatus(STATUS_NODE)
 	//ds.SetStatus(STATUS_DELETING)
 	//ds.Clean()
 	err := iter.Error()
 	return err
 }
+
+//func (ds *Dataset) Migrating() error {
+//	//ds.SetStatus(STATUS_MIGRATING)
+//	ds.migrater.SetStatus(STATUS_IMPORTING)
+//	iter := DB.NewIterator(nil, nil)
+//	for ok := iter.Seek(ds.Name); ok; iter.Next() {
+//		// Remember that the contents of the returned slice should not be modified, and
+//		// only valid until the next call to Next.
+//		key := iter.Key()
+//		if !bytes.Equal(ds.Name, key[:len(ds.Name)]) {
+//			break
+//		}
+//		value := iter.Value()
+//		item := Item{Sequence: ds.Sequence, Key: ds.RawKey(key), Value: value}
+//		ds.migrater.Copy(item)
+//	}
+//	iter.Release()
+//	ds.migrater.SetStatus(STATUS_NODE)
+//	//ds.SetStatus(STATUS_DELETING)
+//	//ds.Clean()
+//	err := iter.Error()
+//	return err
+//}
