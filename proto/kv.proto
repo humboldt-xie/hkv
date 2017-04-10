@@ -1,0 +1,35 @@
+syntax = "proto3";
+package kv;
+
+
+service Kv{
+  rpc Set(SetRequest) returns (SetReply) {}
+  rpc Get(GetRequest) returns (GetReply) {}
+}
+
+message Item {
+	int64 Sequence=1;
+	string Key=2;
+	string Value=3;
+
+}
+
+// The request message containing the user's name.
+message SetRequest{
+  string Key  = 1;
+  string Value= 2;
+}
+
+message GetRequest{
+  string Key  = 1;
+}
+
+
+// The response message containing the greetings
+message SetReply{
+  string result= 1;
+}
+
+message GetReply {
+	string Value = 1;
+}
