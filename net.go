@@ -52,7 +52,7 @@ func (s *Server) getDataset(Name string) *Dataset {
 		return ds
 	}
 	s.ds[Name] = &Dataset{DbHandle: s.DbHandle, Name: Name, Status: STATUS_NODE, Sequence: 0}
-
+	s.ds[Name].Init()
 	return s.ds[Name]
 }
 
@@ -162,14 +162,14 @@ func (ds *Importer) ImportFrom() error {
 		}
 		if resp.Cmd == "copy" {
 			set := ds.dataset[resp.Dataset]
-			log.Printf("copy from %s : %s=>%s %#v", ds.RemoteAddr, resp.Data.Key, resp.Data.Value, set)
+			log.Printf("copy from %s : %#v %#v", ds.RemoteAddr, resp.Data, set)
 			if set != nil {
 				set.Copy(*resp.Data)
 			}
 		}
 		if resp.Cmd == "sync" {
 			set := ds.dataset[resp.Dataset]
-			log.Printf("sync from %s : %s=>%s %#v", ds.RemoteAddr, resp.Data.Key, resp.Data.Value, set)
+			log.Printf("sync from %s : %#v %#v", ds.RemoteAddr, resp.Data, set)
 			if set != nil {
 				set.Sync(*resp.Data)
 			}

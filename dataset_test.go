@@ -47,6 +47,7 @@ func TestSlot(t *testing.T) {
 	other.CopyTo(0, p)
 
 	ds := Dataset{DbHandle: GlobalDbHandle, Name: "test-", Status: "node"}
+	ds.Init()
 	ds.Set([]byte("hello"), []byte("world"))
 	ds.Set([]byte("hello2"), []byte("world2"))
 	ds.CopyTo(0, &LocalDatasetMigrater{t: t, other: &other})
@@ -55,5 +56,8 @@ func TestSlot(t *testing.T) {
 
 	//other.migrater = &printer{t: t}
 	other.CopyTo(0, p)
+
+	data, err := ds.LastBinlog()
+	t.Log("last binlog : %#v %s", data, err)
 	t.Fatal("end")
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	kv "github.com/humboldt-xie/hkv/proto"
 	"github.com/syndtr/goleveldb/leveldb"
 	"log"
@@ -53,7 +54,15 @@ func main() {
 	log.Printf("set s1")
 	s1.Set([]byte("hello"), []byte("world"))
 	s2.Set([]byte("hello2"), []byte("world"))
-	time.Sleep(1 * time.Second)
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		for i := 0; i < 10; i++ {
+			s1.Set([]byte(fmt.Sprintf("key-%d", i)), []byte("world"))
+		}
+	}()
+
+	time.Sleep(2 * time.Second)
 	log.Printf("get s2")
 	v, err := s2.Get([]byte("hello"))
 	log.Printf("s2 hello %s %s", string(v), err)
