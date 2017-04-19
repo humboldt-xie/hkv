@@ -1,9 +1,10 @@
 package main
 
 import (
-	pb "github.com/humboldt-xie/hkv/proto"
+	kv "github.com/humboldt-xie/hkv/proto"
 	"github.com/syndtr/goleveldb/leveldb"
-	"sync"
+	"log"
+	"time"
 )
 
 var SlotCount = 16
@@ -15,15 +16,10 @@ type Kv interface {
 
 type Mirror interface {
 	SetStatus(string) error
-	Copy(Item) error
-	Sync(Item) error
+	Copy(kv.Data) error
+	Sync(kv.Data) error
 }
-
-type Item struct {
-	Sequence int64
-	Key      []byte
-	Value    []byte
-}
+type DbHandle func() *leveldb.DB
 
 func GetDb() *leveldb.DB {
 	db, err := leveldb.OpenFile("db", nil)
@@ -33,93 +29,35 @@ func GetDb() *leveldb.DB {
 	return db
 }
 
-type Node struct {
-	Id      string
-	Dataset map[string]*Dataset
-}
-
-func NewNode(Id string) *Node {
-	return &Node{Id: Id}
-}
-
-type DatasetMirrorServer struct {
-	set *Dataset
-}
-
-func (s *DatasetMirrorServer) Mirror(req *pb.MirrorRequest, mirror pb.Data_MirrorServer) error {
-	//s.set.mirror = s
-	go s.set.CopyTo(s)
-	return nil
-}
-
-func (ds *DatasetMirrorServer) SetStatus(status string) error {
-	//ds.Status = status
-	return nil
-}
-
-func (ds *DatasetMirrorServer) Copy(item Item) error {
-	return nil //DB.Put(ds.Key(item.Key), item.Value, nil)
-}
-
-func (ds *DatasetMirrorServer) Sync(item Item) error {
-	return nil //DB.Put(ds.Key(item.Key), item.Value, nil)
-}
-
-type Service struct {
-	mu  sync.Mutex
-	dss map[string]*DatasetMirrorServer
-	ds  map[string]*Dataset
-}
-
-func (s *Service) Init() {
-	s.dss = make(map[string]*DatasetMirrorServer)
-	s.ds = make(map[string]*Dataset)
-	//s.GetDataset("1-")
-}
-
-func (s *Service) GetDataset(Name string) *Dataset {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if ds, ok := s.ds[Name]; ok {
-		return ds
-	}
-	s.ds[Name] = &Dataset{Name: []byte(Name), Status: STATUS_NODE, Sequence: 0}
-	return s.ds[Name]
-}
-
-func (s *Service) StartMirror(mreq *pb.MirrorRequest, mirror pb.Data_MirrorServer) {
-	s.mu.Lock()
-	//mreq.Dataset["]
-	dataset := "1-"
-	if _, ok := s.dss[dataset]; !ok {
-		s.dss[dataset] = &DatasetMirrorServer{set: s.GetDataset(dataset)}
-	}
-	dss := s.dss[dataset]
-	s.mu.Unlock()
-	dss.Mirror(mreq, mirror)
-}
-
-func (s *Service) Mirror(mirror pb.Data_MirrorServer) {
-	for {
-		request, err := mirror.Recv()
-		if err != nil {
-			break
-		}
-		s.StartMirror(request, mirror)
-	}
-
-}
-
-/*func (nd *DataNode) Mirror(req pb.MirrorRequest, reply pb.Node_MirrorServer) error {
-	shard := nd.Shards[req.ShardId]
-	if shard == nil {
-		return fmt.Errorf("node %s shard %d not existing", nd.NodeId, req.ShardId)
-	}
-	return shard.Mirror(req, reply)
-}*/
-
 var DB = GetDb()
 
+func GlobalDbHandle() *leveldb.DB {
+	return DB
+}
+
 func main() {
-	DB.Close()
+	s1 := Server{}
+	s1.Init("s1")
+	log.Printf("init s1")
+	go s1.ListenAndServe("127.0.0.1:7001")
+	time.Sleep(1 * time.Second)
+	s2 := Server{}
+	s2.Init("s2")
+	log.Printf("init s2")
+	go s2.ListenAndServe("127.0.0.1:7002")
+	time.Sleep(1 * time.Second)
+	log.Printf("init mirror to")
+	s2.ImportFrom("127.0.0.1:7001")
+	s1.ImportFrom("127.0.0.1:7002")
+
+	log.Printf("set s1")
+	s1.Set([]byte("hello"), []byte("world"))
+	s2.Set([]byte("hello2"), []byte("world"))
+	time.Sleep(1 * time.Second)
+	log.Printf("get s2")
+	v, err := s2.Get([]byte("hello"))
+	log.Printf("s2 hello %s %s", string(v), err)
+	v, err = s1.Get([]byte("hello2"))
+	log.Printf("s1 hello2 %s %s", string(v), err)
+	return
 }

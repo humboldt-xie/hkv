@@ -1,30 +1,12 @@
 package main
 
 import (
+	hkv "github.com/humboldt-xie/hkv/proto"
 	"testing"
 )
 
-type printer struct {
-	Name string
-	t    *testing.T
-}
-
-func (ds *printer) SetStatus(status string) error {
-	ds.t.Log(ds.Name, ":set status", status)
-	return nil
-}
-
-func (ds *printer) Copy(item Item) error {
-	ds.t.Log(ds.Name, ":copy", string(item.Key), string(item.Value))
-	return nil
-}
-
-func (ds *printer) Sync(item Item) error {
-	ds.t.Log(ds.Name, ":sync", string(item.Key), string(item.Value))
-	return nil
-}
-
 type LocalDatasetMigrater struct {
+	Name    string
 	t       *testing.T
 	other   *Dataset
 	lastkey string
@@ -32,36 +14,46 @@ type LocalDatasetMigrater struct {
 
 func (ds *LocalDatasetMigrater) SetStatus(status string) error {
 	ds.t.Log("set status", status)
+	if ds.other == nil {
+		return nil
+	}
 	return ds.other.SetStatus(status)
 	//return nil
 }
 
-func (ds *LocalDatasetMigrater) Copy(item Item) error {
-	ds.lastkey = string(item.Key)
-	ds.t.Log("copy[", ds.lastkey, "]", string(item.Key), string(item.Value))
-	return ds.other.Copy(item)
-	//return nil //DB.Put(item.Key, item.Value)
+func (ds *LocalDatasetMigrater) Copy(data hkv.Data) error {
+	ds.lastkey = string(data.Key)
+	ds.t.Log("copy[", ds.lastkey, "](", data.Sequence, ")", string(data.Key), string(data.Value))
+	if ds.other == nil {
+		return nil
+	}
+	return ds.other.Copy(data)
+	//return nil //DB.Put(data.Key, data.Value)
 }
 
-func (ds *LocalDatasetMigrater) Sync(item Item) error {
-	ds.t.Log("sync[", ds.lastkey, "]", string(item.Key), string(item.Value))
-	return ds.other.Sync(item)
-	//return nil //DB.Put(item.Key, item.Value)
+func (ds *LocalDatasetMigrater) Sync(data hkv.Data) error {
+	ds.t.Log("sync[", ds.lastkey, "](", data.Sequence, ")", string(data.Key), string(data.Value))
+	if ds.other == nil {
+		return nil
+	}
+	return ds.other.Sync(data)
+	//return nil //DB.Put(data.Key, data.Value)
 }
 
 func TestSlot(t *testing.T) {
-	other := Dataset{Name: []byte("other-"), Status: "node", migrater: &printer{Name: "other", t: t}}
+	p := &LocalDatasetMigrater{Name: "other", t: t}
+	other := Dataset{DbHandle: GlobalDbHandle, Name: "other-", Status: "node"}
 	other.Clean()
-	other.Migrating()
+	other.CopyTo(0, p)
 
-	ds := Dataset{Name: []byte("test-"), Status: "node", migrater: &LocalDatasetMigrater{t: t, other: &other}}
+	ds := Dataset{DbHandle: GlobalDbHandle, Name: "test-", Status: "node"}
 	ds.Set([]byte("hello"), []byte("world"))
 	ds.Set([]byte("hello2"), []byte("world2"))
-	ds.Migrating()
+	ds.CopyTo(0, &LocalDatasetMigrater{t: t, other: &other})
 	ds.Set([]byte("hello1"), []byte("world1"))
 	ds.Set([]byte("hello"), []byte("world-second"))
 
 	//other.migrater = &printer{t: t}
-	other.Migrating()
+	other.CopyTo(0, p)
 	t.Fatal("end")
 }

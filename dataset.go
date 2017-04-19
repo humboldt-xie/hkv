@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	kv "github.com/humboldt-xie/hkv/proto"
+	"log"
 	"sync"
 )
 
@@ -13,13 +15,19 @@ var (
 	STATUS_EMPTY     = "empty"
 )
 
+type Binlog struct {
+	Name      []byte
+	MaxBinlog int64
+}
+
 type Dataset struct {
-	mu       sync.Mutex
-	Name     []byte
-	Status   string
-	Sequence int64
-	//migrater Mirror
-	mirror Mirror
+	mu        sync.Mutex
+	Name      string
+	Status    string
+	Sequence  int64
+	MaxBinlog int64
+	DbHandle  DbHandle
+	mirror    Mirror
 }
 
 func (ds *Dataset) RawKey(key []byte) []byte {
@@ -27,7 +35,7 @@ func (ds *Dataset) RawKey(key []byte) []byte {
 }
 
 func (ds *Dataset) Key(key []byte) []byte {
-	return append(ds.Name, key...)
+	return append([]byte(ds.Name), key...)
 }
 
 func (ds *Dataset) SetStatus(status string) error {
@@ -35,84 +43,87 @@ func (ds *Dataset) SetStatus(status string) error {
 	return nil
 }
 
-func (ds *Dataset) Copy(item Item) error {
-	return DB.Put(ds.Key(item.Key), item.Value, nil)
+func (ds *Dataset) Copy(data kv.Data) error {
+	log.Printf("copy %s", string(ds.Key(data.Key)))
+	return ds.DbHandle().Put(ds.Key(data.Key), data.Value, nil)
 }
 
-func (ds *Dataset) Sync(item Item) error {
-	return DB.Put(ds.Key(item.Key), item.Value, nil)
+func (ds *Dataset) Sync(data kv.Data) error {
+	return ds.DbHandle().Put(ds.Key(data.Key), data.Value, nil)
 }
 
 func (ds *Dataset) Set(key []byte, value []byte) error {
 	ds.mu.Lock()
 	ds.Sequence += 1
-	item := Item{Sequence: ds.Sequence, Key: key, Value: value}
+	data := kv.Data{Sequence: ds.Sequence, Key: key, Value: value}
 	mirror := ds.mirror
 	ds.mu.Unlock()
 	if mirror != nil {
-		mirror.Sync(item)
+		mirror.Sync(data)
 	}
-	return DB.Put(ds.Key(key), value, nil)
+	return ds.DbHandle().Put(ds.Key(key), value, nil)
 }
 
 func (ds *Dataset) Get(key []byte) ([]byte, error) {
-	return DB.Get(ds.Key(key), nil)
+	return ds.DbHandle().Get(ds.Key(key), nil)
 }
 func (ds *Dataset) OnSet(key []byte) bool {
-	if !bytes.Equal(ds.Name, key[:len(ds.Name)]) {
-		return false
+	if len(key) > len(ds.Name) && bytes.Equal([]byte(ds.Name), key[:len(ds.Name)]) {
+		return true
 	}
-	return true
+	return false
 }
 func (ds *Dataset) Clean() error {
-	iter := DB.NewIterator(nil, nil)
-	for ok := iter.Seek(ds.Name); ok; iter.Next() {
+	iter := ds.DbHandle().NewIterator(nil, nil)
+	for ok := iter.Seek([]byte(ds.Name)); ok; iter.Next() {
 		// Remember that the contents of the returned slice should not be modified, and
 		// only valid until the next call to Next.
 		key := iter.Key()
 		if !ds.OnSet(key) {
 			break
 		}
-		DB.Delete(key, nil)
+		ds.DbHandle().Delete(key, nil)
 		//value := iter.Value()
-		//item := Item{Sequence: ds.Sequence, Key: ds.RawKey(key), Value: value}
-		//ds.migrater.Copy(item)
+		//data := Data{Sequence: ds.Sequence, Key: ds.RawKey(key), Value: value}
+		//ds.migrater.Copy(data)
 	}
 	return nil
 }
-
 func (ds *Dataset) SyncTo(sequence int64, mirror Mirror) error {
 	return nil
 }
 
-func (ds *Dataset) CopyTo(mirror Mirror) error {
+func (ds *Dataset) CopyTo(sequence int64, mirror Mirror) error {
 	//ds.SetStatus(STATUS_MIGRATING)
 	ds.mirror = mirror
-	ds.mirror.SetStatus(STATUS_IMPORTING)
-	iter := DB.NewIterator(nil, nil)
-	for ok := iter.Seek(ds.Name); ok; iter.Next() {
-		// Remember that the contents of the returned slice should not be modified, and
-		// only valid until the next call to Next.
-		key := iter.Key()
-		if !bytes.Equal(ds.Name, key[:len(ds.Name)]) {
-			break
+	if sequence < ds.Sequence-ds.MaxBinlog || sequence == 0 {
+		ds.mirror.SetStatus(STATUS_IMPORTING)
+		iter := ds.DbHandle().NewIterator(nil, nil)
+		for ok := iter.Seek([]byte(ds.Name)); ok; iter.Next() {
+			// Remember that the contents of the returned slice should not be modified, and
+			// only valid until the next call to Next.
+			key := iter.Key()
+			if !ds.OnSet(key) {
+				break
+			}
+			value := iter.Value()
+			data := kv.Data{Sequence: ds.Sequence, Key: ds.RawKey(key), Value: value}
+			ds.mirror.Copy(data)
 		}
-		value := iter.Value()
-		item := Item{Sequence: ds.Sequence, Key: ds.RawKey(key), Value: value}
-		ds.mirror.Copy(item)
+		iter.Release()
+		ds.mirror.SetStatus(STATUS_NODE)
+		err := iter.Error()
+		return err
 	}
-	iter.Release()
-	ds.mirror.SetStatus(STATUS_NODE)
+	return ds.SyncTo(sequence, mirror)
 	//ds.SetStatus(STATUS_DELETING)
 	//ds.Clean()
-	err := iter.Error()
-	return err
 }
 
 //func (ds *Dataset) Migrating() error {
 //	//ds.SetStatus(STATUS_MIGRATING)
 //	ds.migrater.SetStatus(STATUS_IMPORTING)
-//	iter := DB.NewIterator(nil, nil)
+//	iter := ds.DbHandle().NewIterator(nil, nil)
 //	for ok := iter.Seek(ds.Name); ok; iter.Next() {
 //		// Remember that the contents of the returned slice should not be modified, and
 //		// only valid until the next call to Next.
@@ -121,8 +132,8 @@ func (ds *Dataset) CopyTo(mirror Mirror) error {
 //			break
 //		}
 //		value := iter.Value()
-//		item := Item{Sequence: ds.Sequence, Key: ds.RawKey(key), Value: value}
-//		ds.migrater.Copy(item)
+//		data := Data{Sequence: ds.Sequence, Key: ds.RawKey(key), Value: value}
+//		ds.migrater.Copy(data)
 //	}
 //	iter.Release()
 //	ds.migrater.SetStatus(STATUS_NODE)

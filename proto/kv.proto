@@ -7,10 +7,10 @@ service Kv{
   rpc Get(GetRequest) returns (GetReply) {}
 }
 
-message Item {
+message Data{
 	int64 Sequence=1;
-	string Key=2;
-	string Value=3;
+	bytes Key=2;
+	bytes Value=3;
 
 }
 
@@ -37,7 +37,7 @@ message GetReply {
 
 
 //  data service 
-service Data{
+service Mirror{
 	rpc Mirror(stream MirrorRequest) returns (stream MirrorResponse) {}
 }
 
@@ -47,12 +47,15 @@ message Dataset {
 }
 
 message MirrorRequest {
-	string Addr =1;
-	map<string,Dataset> Dataset=2;
+	string  Cmd    =1;
+	string  Addr   =2;
+	Dataset Dataset=3;
 }
 
 message MirrorResponse {
-	string Command =1;
-	string Dataset =2;
-	Item   item =3;
+	string   Cmd =1;
+	string   Dataset=2;
+	repeated string Args=3;
+	Data     Data =4;
+
 }
