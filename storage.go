@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	kv "github.com/humboldt-xie/hkv/proto"
 	"github.com/syndtr/goleveldb/leveldb"
 	"log"
 	"time"
@@ -10,16 +9,6 @@ import (
 
 var SlotCount = 16
 
-type Kv interface {
-	Set(key []byte, value []byte)
-	Get(key []byte) (value []byte, err error)
-}
-
-type Mirror interface {
-	SetStatus(string) error
-	Copy(kv.Data) error
-	Sync(kv.Data) error
-}
 type DbHandle func() *leveldb.DB
 
 func GetDb() *leveldb.DB {

@@ -1,7 +1,7 @@
 package main
 
 import (
-	pb "github.com/humboldt-xie/hkv/proto"
+	kvproto "github.com/humboldt-xie/hkv/proto"
 	"github.com/syndtr/goleveldb/leveldb"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -41,7 +41,7 @@ func (s *Server) ListenAndServe(addr string) {
 		log.Fatalf("failed to listen: %v", err)
 	}
 	server := grpc.NewServer()
-	pb.RegisterMirrorServer(server, s)
+	kvproto.RegisterMirrorServer(server, s)
 	server.Serve(lis)
 }
 
@@ -51,7 +51,7 @@ func (s *Server) getDataset(Name string) *Dataset {
 	if ds, ok := s.ds[Name]; ok {
 		return ds
 	}
-	s.ds[Name] = &Dataset{DbHandle: s.DbHandle, Name: Name, Status: STATUS_NODE, Sequence: 0}
+	s.ds[Name] = &Dataset{DbHandle: s.DbHandle, Name: Name, Status: STATUS_NODE, Sequence: 0, MaxBinlog: 10000000}
 	s.ds[Name].Init()
 	return s.ds[Name]
 }
@@ -99,7 +99,7 @@ func (s *Server) ImportFrom(addr string) error {
 }
 
 // mirror server
-func (s *Server) Mirror(mirror pb.Mirror_MirrorServer) error {
+func (s *Server) Mirror(mirror kvproto.Mirror_MirrorServer) error {
 	for {
 		request, err := mirror.Recv()
 		if err != nil {
@@ -147,13 +147,13 @@ func (ds *Importer) ImportFrom() error {
 		return err
 	}
 	defer conn.Close()
-	c := pb.NewMirrorClient(conn)
+	c := kvproto.NewMirrorClient(conn)
 	mirrorClient, err := c.Mirror(context.Background())
 	if err != nil {
 		return err
 	}
 	for _, v := range ds.dataset {
-		mirrorClient.Send(&pb.MirrorRequest{Cmd: "mirror", Addr: ds.LocalAddr, Dataset: &pb.Dataset{Name: string(v.Name), Sequence: v.Sequence}})
+		mirrorClient.Send(&kvproto.MirrorRequest{Cmd: "mirror", Addr: ds.LocalAddr, Dataset: &kvproto.Dataset{Name: string(v.Name), Sequence: v.Sequence}})
 	}
 	for {
 		resp, err := mirrorClient.Recv()
@@ -164,14 +164,14 @@ func (ds *Importer) ImportFrom() error {
 			set := ds.dataset[resp.Dataset]
 			log.Printf("copy from %s : %#v %#v", ds.RemoteAddr, resp.Data, set)
 			if set != nil {
-				set.Copy(*resp.Data)
+				set.Copy(resp.Data)
 			}
 		}
 		if resp.Cmd == "sync" {
 			set := ds.dataset[resp.Dataset]
 			log.Printf("sync from %s : %#v %#v", ds.RemoteAddr, resp.Data, set)
 			if set != nil {
-				set.Sync(*resp.Data)
+				set.Sync(resp.Data)
 			}
 		}
 	}
@@ -182,10 +182,10 @@ type Exporter struct {
 	set       *Dataset
 	IsRunning bool
 	Addr      string
-	mirror    pb.Mirror_MirrorServer
+	mirror    kvproto.Mirror_MirrorServer
 }
 
-func (ds *Exporter) CopyTo(req *pb.MirrorRequest, mirror pb.Mirror_MirrorServer) error {
+func (ds *Exporter) CopyTo(req *kvproto.MirrorRequest, mirror kvproto.Mirror_MirrorServer) error {
 	if ds.IsRunning {
 		return nil
 	}
@@ -198,7 +198,7 @@ func (ds *Exporter) CopyTo(req *pb.MirrorRequest, mirror pb.Mirror_MirrorServer)
 	log.Printf("start copy to %s->%s", ds.Addr, req.Addr)
 	//go ds.ImportFrom(req.Addr)
 	//req.Dataset.Sequence
-	return ds.set.CopyTo(0, ds)
+	return ds.set.CopyTo(req.Dataset.Sequence, ds)
 }
 
 func (ds *Exporter) SetStatus(status string) error {
@@ -207,12 +207,12 @@ func (ds *Exporter) SetStatus(status string) error {
 	return nil
 }
 
-func (ds *Exporter) Copy(data pb.Data) error {
+func (ds *Exporter) Copy(data *kvproto.Data) error {
 	log.Print("copy[", "](", data.Sequence, ")", string(data.Key), "=>", string(data.Value))
-	return ds.mirror.Send(&pb.MirrorResponse{Dataset: ds.set.Name, Cmd: "copy", Data: &data})
+	return ds.mirror.Send(&kvproto.MirrorResponse{Dataset: ds.set.Name, Cmd: "copy", Data: data})
 }
 
-func (ds *Exporter) Sync(data pb.Data) error {
+func (ds *Exporter) Sync(data *kvproto.Data) error {
 	log.Print("sync[", "](", data.Sequence, ")", string(data.Key), "=>", string(data.Value))
-	return ds.mirror.Send(&pb.MirrorResponse{Dataset: ds.set.Name, Cmd: "sync", Data: &data})
+	return ds.mirror.Send(&kvproto.MirrorResponse{Dataset: ds.set.Name, Cmd: "sync", Data: data})
 }
