@@ -1,8 +1,10 @@
 package main
 
 import (
-	"fmt"
+	kvproto "github.com/humboldt-xie/hkv/proto"
 	"github.com/syndtr/goleveldb/leveldb"
+
+	"fmt"
 	"log"
 	"time"
 )
@@ -28,11 +30,13 @@ func GlobalDbHandle() *leveldb.DB {
 func main() {
 	s1 := Server{}
 	s1.Init("s1")
+	s1.AddDataset("1-")
 	log.Printf("init s1")
 	go s1.ListenAndServe("127.0.0.1:7001")
 	time.Sleep(1 * time.Second)
 	s2 := Server{}
 	s2.Init("s2")
+	s2.AddDataset("1-")
 	log.Printf("init s2")
 	go s2.ListenAndServe("127.0.0.1:7002")
 	time.Sleep(1 * time.Second)
@@ -41,21 +45,28 @@ func main() {
 	s1.ImportFrom("127.0.0.1:7002")
 
 	log.Printf("set s1")
-	s1.Set([]byte("hello"), []byte("world"))
-	s2.Set([]byte("hello2"), []byte("world"))
+	s1.Set(&kvproto.SetRequest{Dataset: "1-", Key: []byte("hello"), Value: []byte("world")})
+	s2.Set(&kvproto.SetRequest{Dataset: "1-", Key: []byte("hello2"), Value: []byte("world")})
 
 	go func() {
 		time.Sleep(1 * time.Second)
 		for i := 0; i < 10; i++ {
-			s1.Set([]byte(fmt.Sprintf("key-%d", i)), []byte("world"))
+			//s1.Set([]byte(fmt.Sprintf("key-%d", i)), []byte("world"))
+			key := []byte(fmt.Sprintf("key-%d", i))
+			s1.Set(&kvproto.SetRequest{Dataset: "1-", Key: key, Value: []byte("world")})
 		}
 	}()
 
 	time.Sleep(2 * time.Second)
 	log.Printf("get s2")
-	v, err := s2.Get([]byte("hello"))
-	log.Printf("s2 hello %s %s", string(v), err)
-	v, err = s1.Get([]byte("hello2"))
-	log.Printf("s1 hello2 %s %s", string(v), err)
+	v, err := s2.Get(&kvproto.GetRequest{Dataset: "1-", Key: []byte("hello")})
+	log.Printf("s2 hello %#v %s", v, err)
+	v, err = s1.Get(&kvproto.GetRequest{Dataset: "1-", Key: []byte("hello")})
+	log.Printf("s1 hello2 %#v %s", v, err)
+	log.Printf("s1 info")
+	log.Printf("%s", s1.Info())
+	log.Printf("s2 info")
+	log.Printf("%s", s2.Info())
+	time.Sleep(1000 * time.Second)
 	return
 }

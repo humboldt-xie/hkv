@@ -34,13 +34,14 @@ func Sequence2Int(seq string) int64 {
 }
 
 type Dataset struct {
-	mu        sync.Mutex
-	Name      string
-	Status    string
-	Sequence  int64
-	MaxBinlog int64
-	DbHandle  DbHandle
-	mirror    Mirror
+	mu          sync.Mutex
+	Name        string
+	Status      string
+	MinSequence int64
+	Sequence    int64
+	MaxBinlog   int64
+	dbHandle    DbHandle
+	mirror      Mirror
 }
 
 func (ds *Dataset) Init() {
@@ -49,6 +50,11 @@ func (ds *Dataset) Init() {
 		return
 	}
 	ds.Sequence = data.Sequence
+	first, err := ds.FirstBinlog()
+	if err != nil {
+		log.Printf("[%s]get first binlog error:%s", ds.Name, err)
+	}
+	ds.MinSequence = first.Sequence
 	go ds.deleteBinlogBackend()
 }
 
@@ -64,7 +70,7 @@ func (ds *Dataset) Key(t string, key []byte) []byte {
 }
 
 func (ds *Dataset) FirstBinlog() (*kvproto.Data, error) {
-	iter := ds.DbHandle().NewIterator(&util.Range{Start: ds.Key("b", []byte{}), Limit: ds.Key("b", []byte(Sequence2str(math.MaxInt64)))}, nil)
+	iter := ds.dbHandle().NewIterator(&util.Range{Start: ds.Key("b", []byte{}), Limit: ds.Key("b", []byte(Sequence2str(math.MaxInt64)))}, nil)
 
 	data := &kvproto.Data{}
 	if ok := iter.First(); ok {
@@ -77,7 +83,7 @@ func (ds *Dataset) FirstBinlog() (*kvproto.Data, error) {
 }
 
 func (ds *Dataset) LastBinlog() (*kvproto.Data, error) {
-	iter := ds.DbHandle().NewIterator(&util.Range{Start: ds.Key("b", []byte{}), Limit: ds.Key("b", []byte(Sequence2str(math.MaxInt64)))}, nil)
+	iter := ds.dbHandle().NewIterator(&util.Range{Start: ds.Key("b", []byte{}), Limit: ds.Key("b", []byte(Sequence2str(math.MaxInt64)))}, nil)
 
 	data := &kvproto.Data{}
 	if ok := iter.Last(); ok {
@@ -90,22 +96,11 @@ func (ds *Dataset) LastBinlog() (*kvproto.Data, error) {
 }
 
 func (ds *Dataset) deleteBinlogBackend() {
-	firstSequence := int64(0)
 	for {
-		first, err := ds.FirstBinlog()
-		if err != nil {
-			time.Sleep(1 * time.Second)
-			log.Printf("[%s]get first binlog error:%s", ds.Name, err)
-			continue
-		}
-		firstSequence = first.Sequence
-		break
-	}
-	for {
-		if ds.Sequence-firstSequence > ds.MaxBinlog {
-			iter := ds.DbHandle().NewIterator(
+		if ds.Sequence-ds.MinSequence > ds.MaxBinlog {
+			iter := ds.dbHandle().NewIterator(
 				&util.Range{
-					Start: ds.Key("b", []byte(Sequence2str(firstSequence))),
+					Start: ds.Key("b", []byte(Sequence2str(ds.MinSequence))),
 					Limit: ds.Key("b", []byte(Sequence2str(ds.Sequence-ds.MaxBinlog))),
 				}, nil)
 
@@ -113,9 +108,9 @@ func (ds *Dataset) deleteBinlogBackend() {
 				data := &kvproto.Data{}
 				err := proto.Unmarshal(iter.Value(), data)
 				if err == nil {
-					firstSequence = data.Sequence
+					ds.MinSequence = data.Sequence
 				}
-				ds.DbHandle().Delete(iter.Key(), nil)
+				ds.dbHandle().Delete(iter.Key(), nil)
 			}
 		}
 		time.Sleep(1 * time.Second)
@@ -123,7 +118,7 @@ func (ds *Dataset) deleteBinlogBackend() {
 }
 func (ds *Dataset) GetBinlog(sequence int64) (*kvproto.Data, error) {
 	binlogkey := ds.Key("b", []byte(Sequence2str(sequence)))
-	bytes, err := ds.DbHandle().Get(binlogkey, nil)
+	bytes, err := ds.dbHandle().Get(binlogkey, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +140,7 @@ func (ds *Dataset) addBinlog(batch *leveldb.Batch, data *kvproto.Data) ([]byte, 
 	batch.Put(binlogkey, bytes)
 
 	return bytes, nil
-	//return ds.DbHandle().Put(binlogkey, bytes, nil)
+	//return ds.dbHandle().Put(binlogkey, bytes, nil)
 }
 
 func (ds *Dataset) SetStatus(status string) error {
@@ -166,7 +161,7 @@ func (ds *Dataset) Copy(data *kvproto.Data) error {
 	}
 	return err
 
-	//return ds.DbHandle().Put(ds.Key("d", data.Key), data.Value, nil)
+	//return ds.dbHandle().Put(ds.Key("d", data.Key), data.Value, nil)
 }
 
 func (ds *Dataset) Sync(data *kvproto.Data) error {
@@ -184,11 +179,11 @@ func (ds *Dataset) Sync(data *kvproto.Data) error {
 		mirror.Sync(data)
 	}
 	return err
-	//return ds.DbHandle().Put(ds.Key("d", data.Key), data.Value, nil)
+	//return ds.dbHandle().Put(ds.Key("d", data.Key), data.Value, nil)
 }
 
 func (ds *Dataset) set(data *kvproto.Data) error {
-	db := ds.DbHandle()
+	db := ds.dbHandle()
 	batch := new(leveldb.Batch)
 	bytes, err := ds.addBinlog(batch, data)
 	if err != nil {
@@ -199,10 +194,10 @@ func (ds *Dataset) set(data *kvproto.Data) error {
 
 }
 
-func (ds *Dataset) Set(key []byte, value []byte) error {
+func (ds *Dataset) Set(req *kvproto.SetRequest) (*kvproto.SetReply, error) {
 	ds.mu.Lock()
 	ds.Sequence += 1
-	data := &kvproto.Data{Sequence: ds.Sequence, Key: key, Value: value}
+	data := &kvproto.Data{Sequence: ds.Sequence, Key: req.Key, Value: req.Value}
 	err := ds.set(data)
 	ds.mu.Unlock()
 
@@ -210,12 +205,15 @@ func (ds *Dataset) Set(key []byte, value []byte) error {
 	if mirror != nil {
 		mirror.Sync(data)
 	}
+	if err != nil {
+		return nil, err
+	}
 
-	return err
+	return &kvproto.SetReply{Sequence: data.Sequence}, nil
 }
 
 func (ds *Dataset) GetData(key []byte) (*kvproto.Data, error) {
-	bytes, err := ds.DbHandle().Get(ds.Key("d", key), nil)
+	bytes, err := ds.dbHandle().Get(ds.Key("d", key), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -227,12 +225,12 @@ func (ds *Dataset) GetData(key []byte) (*kvproto.Data, error) {
 	return data, err
 }
 
-func (ds *Dataset) Get(key []byte) ([]byte, error) {
-	data, err := ds.GetData(key)
+func (ds *Dataset) Get(req *kvproto.GetRequest) (*kvproto.GetReply, error) {
+	data, err := ds.GetData(req.Key)
 	if err != nil {
 		return nil, err
 	}
-	return data.Value, nil
+	return &kvproto.GetReply{Data: data}, nil
 }
 
 func (ds *Dataset) OnSet(key []byte) bool {
@@ -242,7 +240,7 @@ func (ds *Dataset) OnSet(key []byte) bool {
 	return false
 }
 func (ds *Dataset) Clean() error {
-	iter := ds.DbHandle().NewIterator(nil, nil)
+	iter := ds.dbHandle().NewIterator(nil, nil)
 	for ok := iter.Seek([]byte(ds.Name)); ok; iter.Next() {
 		// Remember that the contents of the returned slice should not be modified, and
 		// only valid until the next call to Next.
@@ -250,7 +248,7 @@ func (ds *Dataset) Clean() error {
 		if !ds.OnSet(key) {
 			break
 		}
-		ds.DbHandle().Delete(key, nil)
+		ds.dbHandle().Delete(key, nil)
 	}
 	return nil
 }
@@ -274,15 +272,10 @@ func (ds *Dataset) SyncTo(sequence int64, mirror Mirror) error {
 func (ds *Dataset) CopyTo(sequence int64, mirror Mirror) error {
 	//ds.SetStatus(STATUS_MIGRATING)
 	ds.mirror = mirror
-	first, err := ds.FirstBinlog()
-	if err != nil {
-		log.Printf("[%s]get first binlog error:%s", ds.Name, err)
-		return err
-	}
 	log.Printf("[%s]CopyTo [%d-%d]", ds.Name, sequence, ds.Sequence)
-	if sequence < first.Sequence || sequence == 0 {
+	if sequence < ds.MinSequence || sequence == 0 {
 		ds.mirror.SetStatus(STATUS_IMPORTING)
-		iter := ds.DbHandle().NewIterator(nil, nil)
+		iter := ds.dbHandle().NewIterator(nil, nil)
 		for ok := iter.Seek(ds.Key("d", []byte{})); ok; iter.Next() {
 
 			// Remember that the contents of the returned slice should not be modified, and
@@ -313,7 +306,7 @@ func (ds *Dataset) CopyTo(sequence int64, mirror Mirror) error {
 //func (ds *Dataset) Migrating() error {
 //	//ds.SetStatus(STATUS_MIGRATING)
 //	ds.migrater.SetStatus(STATUS_IMPORTING)
-//	iter := ds.DbHandle().NewIterator(nil, nil)
+//	iter := ds.dbHandle().NewIterator(nil, nil)
 //	for ok := iter.Seek(ds.Name); ok; iter.Next() {
 //		// Remember that the contents of the returned slice should not be modified, and
 //		// only valid until the next call to Next.

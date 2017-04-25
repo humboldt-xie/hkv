@@ -5,33 +5,47 @@ import (
 	"github.com/syndtr/goleveldb/leveldb"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"gopkg.in/yaml.v2"
+
+	"errors"
 	"log"
 	"net"
 	"sync"
 )
 
+var (
+	ErrDatasetNotFound = errors.New("dataset not found")
+)
+
 type Server struct {
-	mu       sync.Mutex
+	Id       string
 	Addr     string
-	config   *Dataset
-	DB       *leveldb.DB
-	dss      map[string]*Exporter
-	importer map[string]*Importer
-	ds       map[string]*Dataset
+	DBName   string
+	Exporter map[string]*Exporter
+	Importer map[string]*Importer
+	Dataset  map[string]*Dataset
+	//private
+	config  *Dataset
+	db      *leveldb.DB
+	cluster *Cluster
+	mu      sync.Mutex
 }
 
 func (s *Server) Init(DBName string) {
+	s.DBName = DBName
 	db, err := leveldb.OpenFile(DBName, nil)
 	if err != nil {
 		panic(err)
 	}
-	s.DB = db
-	s.dss = make(map[string]*Exporter)
-	s.ds = make(map[string]*Dataset)
-	s.importer = make(map[string]*Importer)
+	s.cluster = &Cluster{current: s, Servers: make(map[string]*kvproto.ServerInfo)}
+	s.cluster.Init()
+	s.db = db
+	s.Exporter = make(map[string]*Exporter)
+	s.Dataset = make(map[string]*Dataset)
+	s.Importer = make(map[string]*Importer)
 }
 func (s *Server) DbHandle() *leveldb.DB {
-	return s.DB
+	return s.db
 }
 
 func (s *Server) ListenAndServe(addr string) {
@@ -42,58 +56,85 @@ func (s *Server) ListenAndServe(addr string) {
 	}
 	server := grpc.NewServer()
 	kvproto.RegisterMirrorServer(server, s)
+	kvproto.RegisterClusterServer(server, s.cluster)
 	server.Serve(lis)
+}
+func (s *Server) AddDataset(Name string) *Dataset {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ds, ok := s.Dataset[Name]; ok {
+		return ds
+	}
+	s.Dataset[Name] = &Dataset{dbHandle: s.DbHandle, Name: Name, Status: STATUS_NODE, Sequence: 0, MaxBinlog: 10000000}
+	s.Dataset[Name].Init()
+	return s.Dataset[Name]
 }
 
 func (s *Server) getDataset(Name string) *Dataset {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if ds, ok := s.ds[Name]; ok {
+	if ds, ok := s.Dataset[Name]; ok {
 		return ds
 	}
-	s.ds[Name] = &Dataset{DbHandle: s.DbHandle, Name: Name, Status: STATUS_NODE, Sequence: 0, MaxBinlog: 10000000}
-	s.ds[Name].Init()
-	return s.ds[Name]
+	return nil
+	/*s.Dataset[Name] = &Dataset{dbHandle: s.DbHandle, Name: Name, Status: STATUS_NODE, Sequence: 0, MaxBinlog: 10000000}
+	s.Dataset[Name].Init()
+	return s.Dataset[Name]*/
 }
 
 func (s *Server) getExporter(dataset string) *Exporter {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	//mreq.Dataset["]
-	if _, ok := s.dss[dataset]; !ok {
+	if _, ok := s.Exporter[dataset]; !ok {
 		s.mu.Unlock()
 		ds := s.getDataset(dataset)
+		if ds == nil {
+			return nil
+		}
 		s.mu.Lock()
-		if _, ok := s.dss[dataset]; !ok {
-			s.dss[dataset] = &Exporter{set: ds, Addr: s.Addr}
+		if _, ok := s.Exporter[dataset]; !ok {
+			s.Exporter[dataset] = &Exporter{set: ds, Addr: s.Addr}
 		}
 	}
-	dss := s.dss[dataset]
-	return dss
+	Exporter := s.Exporter[dataset]
+	return Exporter
 }
-func (s *Server) Set(key []byte, value []byte) error {
-	ds := s.getDataset("1-")
-	return ds.Set(key, value)
+
+func (s *Server) Set(req *kvproto.SetRequest) (*kvproto.SetReply, error) {
+	ds := s.getDataset(req.Dataset)
+	if ds == nil {
+		return nil, ErrDatasetNotFound
+	}
+	return ds.Set(req)
 }
-func (s *Server) Get(key []byte) ([]byte, error) {
-	ds := s.getDataset("1-")
-	return ds.Get(key)
+
+func (s *Server) Get(req *kvproto.GetRequest) (*kvproto.GetReply, error) {
+	ds := s.getDataset(req.Dataset)
+	if ds == nil {
+		return nil, ErrDatasetNotFound
+	}
+	return ds.Get(req)
 }
 
 func (s *Server) getImporter(addr string) *Importer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	//mreq.Dataset["]
-	if _, ok := s.importer[addr]; !ok {
-		s.importer[addr] = &Importer{s: s, LocalAddr: s.Addr, RemoteAddr: addr}
+	if _, ok := s.Importer[addr]; !ok {
+		s.Importer[addr] = &Importer{s: s, LocalAddr: s.Addr, RemoteAddr: addr}
 	}
-	return s.importer[addr]
+	return s.Importer[addr]
 
 }
 
 func (s *Server) ImportFrom(addr string) error {
 	imp := s.getImporter(addr)
-	imp.Add("1-", s.getDataset("1-"))
+	dataset := s.getDataset("1-")
+	if dataset == nil {
+		return ErrDatasetNotFound
+	}
+	imp.Add("1-", dataset)
 	go imp.ImportFrom()
 	return nil
 }
@@ -106,10 +147,25 @@ func (s *Server) Mirror(mirror kvproto.Mirror_MirrorServer) error {
 			panic(err)
 			return err
 		}
-		dss := s.getExporter(request.Dataset.Name)
-		go dss.CopyTo(request, mirror)
+		exporter := s.getExporter(request.Dataset.Name)
+		if exporter == nil {
+			//TODO fix error
+			log.Printf("not found exporter :%s", request.Dataset.Name)
+			continue
+		}
+		go exporter.CopyTo(request, mirror)
 	}
 	return nil
+}
+
+func (s *Server) Info() string {
+	//res := ""
+	d, err := yaml.Marshal(&s)
+	if err != nil {
+		log.Fatalf("error: %v", err)
+		return ""
+	}
+	return string(d)
 }
 
 //========================
@@ -122,26 +178,26 @@ type Importer struct {
 	RemoteAddr string
 }
 
-func (ds *Importer) Add(Name string, dataset *Dataset) {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-	if ds.dataset == nil {
-		ds.dataset = make(map[string]*Dataset)
+func (imp *Importer) Add(Name string, dataset *Dataset) {
+	imp.mu.Lock()
+	defer imp.mu.Unlock()
+	if imp.dataset == nil {
+		imp.dataset = make(map[string]*Dataset)
 	}
-	ds.dataset[Name] = dataset
-	log.Printf("importer add dataset:%s", Name)
+	imp.dataset[Name] = dataset
+	log.Printf("Importer add dataset:%s", Name)
 }
 
-func (ds *Importer) ImportFrom() error {
-	if ds.IsRunning {
-		log.Printf("importer is running %s", ds.RemoteAddr)
+func (imp *Importer) ImportFrom() error {
+	if imp.IsRunning {
+		log.Printf("Importer is running %s", imp.RemoteAddr)
 		return nil
 	}
-	ds.IsRunning = true
+	imp.IsRunning = true
 	defer func() {
-		ds.IsRunning = false
+		imp.IsRunning = false
 	}()
-	conn, err := grpc.Dial(ds.RemoteAddr, grpc.WithInsecure())
+	conn, err := grpc.Dial(imp.RemoteAddr, grpc.WithInsecure())
 	if err != nil {
 		log.Printf("did not connect: %v", err)
 		return err
@@ -152,8 +208,8 @@ func (ds *Importer) ImportFrom() error {
 	if err != nil {
 		return err
 	}
-	for _, v := range ds.dataset {
-		mirrorClient.Send(&kvproto.MirrorRequest{Cmd: "mirror", Addr: ds.LocalAddr, Dataset: &kvproto.Dataset{Name: string(v.Name), Sequence: v.Sequence}})
+	for _, v := range imp.dataset {
+		mirrorClient.Send(&kvproto.MirrorRequest{Cmd: "mirror", Addr: imp.LocalAddr, Dataset: &kvproto.Dataset{Name: string(v.Name), Sequence: v.Sequence}})
 	}
 	for {
 		resp, err := mirrorClient.Recv()
@@ -161,15 +217,15 @@ func (ds *Importer) ImportFrom() error {
 			return err
 		}
 		if resp.Cmd == "copy" {
-			set := ds.dataset[resp.Dataset]
-			log.Printf("copy from %s : %#v %#v", ds.RemoteAddr, resp.Data, set)
+			set := imp.dataset[resp.Dataset]
+			log.Printf("copy from %s : %#v %#v", imp.RemoteAddr, resp.Data, set)
 			if set != nil {
 				set.Copy(resp.Data)
 			}
 		}
 		if resp.Cmd == "sync" {
-			set := ds.dataset[resp.Dataset]
-			log.Printf("sync from %s : %#v %#v", ds.RemoteAddr, resp.Data, set)
+			set := imp.dataset[resp.Dataset]
+			log.Printf("sync from %s : %#v %#v", imp.RemoteAddr, resp.Data, set)
 			if set != nil {
 				set.Sync(resp.Data)
 			}
@@ -179,10 +235,12 @@ func (ds *Importer) ImportFrom() error {
 }
 
 type Exporter struct {
-	set       *Dataset
-	IsRunning bool
-	Addr      string
-	mirror    kvproto.Mirror_MirrorServer
+	set          *Dataset
+	IsRunning    bool
+	Addr         string
+	LastSequence int64
+	Status       string
+	mirror       kvproto.Mirror_MirrorServer
 }
 
 func (ds *Exporter) CopyTo(req *kvproto.MirrorRequest, mirror kvproto.Mirror_MirrorServer) error {
@@ -204,15 +262,18 @@ func (ds *Exporter) CopyTo(req *kvproto.MirrorRequest, mirror kvproto.Mirror_Mir
 func (ds *Exporter) SetStatus(status string) error {
 	//ds.Status = status
 	//ds.mirror.
+	ds.Status = status
 	return nil
 }
 
 func (ds *Exporter) Copy(data *kvproto.Data) error {
 	log.Print("copy[", "](", data.Sequence, ")", string(data.Key), "=>", string(data.Value))
+	ds.LastSequence = data.Sequence
 	return ds.mirror.Send(&kvproto.MirrorResponse{Dataset: ds.set.Name, Cmd: "copy", Data: data})
 }
 
 func (ds *Exporter) Sync(data *kvproto.Data) error {
 	log.Print("sync[", "](", data.Sequence, ")", string(data.Key), "=>", string(data.Value))
+	ds.LastSequence = data.Sequence
 	return ds.mirror.Send(&kvproto.MirrorResponse{Dataset: ds.set.Name, Cmd: "sync", Data: data})
 }

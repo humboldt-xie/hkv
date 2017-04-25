@@ -16,22 +16,24 @@ message Data{
 
 // The request message containing the user's name.
 message SetRequest{
-  string Key  = 1;
-  string Value= 2;
+	string Dataset=1;
+  bytes Key  = 2;
+  bytes Value= 3;
 }
 
 message GetRequest{
-  string Key  = 1;
+	string Dataset=1;
+  bytes Key  = 2;
 }
 
 
 // The response message containing the greetings
 message SetReply{
-  string result= 1;
+  int64 Sequence= 1;
 }
 
 message GetReply {
-	string Value = 1;
+	Data data= 1;
 }
 
 
@@ -58,4 +60,48 @@ message MirrorResponse {
 	repeated string Args=3;
 	Data     Data =4;
 
+}
+
+
+// cluster
+
+service Cluster{
+	rpc AddServer(AddServerRequest) returns (AddServerReply) {}
+	rpc AddDataset(AddDatasetRequest) returns (AddDatasetReply) {}
+	rpc DelDataset(DelDatasetRequest) returns (DelDatasetReply) {}
+	rpc SyncServer(SyncServerRequest) returns (SyncServerReply) {}
+}
+
+message SyncServerRequest {
+	map<string,int64> Dataset=1;
+}
+message SyncServerReply {
+	map<string,ServerInfo> Server=1;
+}
+
+message ServerInfo {
+	string ServerId =1;
+	int64  Version=2;
+	string Addr=3;
+	map<string,string> Dataset=4;
+}
+
+message AddServerRequest{
+}
+
+message AddServerReply{
+}
+message AddDatasetRequest{
+	string ServerId =1;
+	string Dataset =2 ;
+}
+message AddDatasetReply{
+	string ServerId =1;
+}
+message DelDatasetRequest{
+	string ServerId =1;
+	string Dataset  =2;
+}
+message DelDatasetReply{
+	string ServerId =1;
 }
