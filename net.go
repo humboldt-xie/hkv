@@ -58,7 +58,7 @@ func (s *Server) Init(DBName string) {
 	}
 
 	//init cluster
-	s.cluster = &Cluster{current: s, Servers: make(map[string]*kvproto.ServerInfo)}
+	s.cluster = &Cluster{current: s}
 	s.cluster.Init()
 
 	//init exporter and so
@@ -152,11 +152,9 @@ func (s *Server) getImporter(addr string) *Importer {
 
 func (s *Server) ImportFrom(addr string) error {
 	imp := s.getImporter(addr)
-	dataset := s.getDataset("1-")
-	if dataset == nil {
-		return ErrDatasetNotFound
+	for k, v := range s.Dataset {
+		imp.Add(k, v)
 	}
-	imp.Add("1-", dataset)
 	go imp.ImportFrom()
 	return nil
 }

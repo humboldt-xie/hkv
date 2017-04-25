@@ -31,12 +31,14 @@ func main() {
 	s1 := Server{}
 	s1.Init("s1")
 	s1.AddDataset("1-")
+	s1.AddDataset("2-")
 	log.Printf("init s1")
 	go s1.ListenAndServe("127.0.0.1:7001")
 	time.Sleep(1 * time.Second)
 	s2 := Server{}
 	s2.Init("s2")
 	s2.AddDataset("1-")
+	s2.AddDataset("2-")
 	log.Printf("init s2")
 	go s2.ListenAndServe("127.0.0.1:7002")
 	time.Sleep(1 * time.Second)
@@ -54,6 +56,11 @@ func main() {
 			//s1.Set([]byte(fmt.Sprintf("key-%d", i)), []byte("world"))
 			key := []byte(fmt.Sprintf("key-%d", i))
 			s1.Set(&kvproto.SetRequest{Dataset: "1-", Key: key, Value: []byte("world")})
+		}
+		for i := 0; i < 10; i++ {
+			//s1.Set([]byte(fmt.Sprintf("key-%d", i)), []byte("world"))
+			key := []byte(fmt.Sprintf("key-%d", i))
+			s1.Set(&kvproto.SetRequest{Dataset: "2-", Key: key, Value: []byte("world")})
 		}
 	}()
 

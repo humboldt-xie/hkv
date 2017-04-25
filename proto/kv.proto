@@ -96,7 +96,6 @@ message AddDatasetRequest{
 	string Dataset =2 ;
 }
 message AddDatasetReply{
-	string ServerId =1;
 }
 message DelDatasetRequest{
 	string ServerId =1;
