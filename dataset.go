@@ -211,6 +211,17 @@ func (ds *Dataset) Set(req *kvproto.SetRequest) (*kvproto.SetReply, error) {
 
 	return &kvproto.SetReply{Sequence: data.Sequence}, nil
 }
+func (ds *Dataset) ConfigSet(key string, value string) error {
+	err := ds.dbHandle().Put(ds.Key("c", []byte(key)), []byte(value), nil)
+	return err
+}
+func (ds *Dataset) ConfigGet(key string) string {
+	bytes, err := ds.dbHandle().Get(ds.Key("c", []byte(key)), nil)
+	if err != nil {
+		return ""
+	}
+	return string(bytes)
+}
 
 func (ds *Dataset) GetData(key []byte) (*kvproto.Data, error) {
 	bytes, err := ds.dbHandle().Get(ds.Key("d", key), nil)

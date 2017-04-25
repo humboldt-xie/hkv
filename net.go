@@ -8,8 +8,10 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"errors"
+	"fmt"
 	"log"
 	"net"
+	"os"
 	"sync"
 )
 
@@ -32,14 +34,34 @@ type Server struct {
 }
 
 func (s *Server) Init(DBName string) {
+
+	// init db
 	s.DBName = DBName
 	db, err := leveldb.OpenFile(DBName, nil)
 	if err != nil {
 		panic(err)
 	}
+	s.db = db
+
+	//init config
+	s.config = &Dataset{dbHandle: s.DbHandle, Name: "config", Status: STATUS_NODE, Sequence: 0, MaxBinlog: 0}
+	s.config.Init()
+
+	s.Id = s.config.ConfigGet("serverid")
+	if s.Id == "" {
+		f, _ := os.OpenFile("/dev/urandom", os.O_RDONLY, 0)
+		b := make([]byte, 16)
+		f.Read(b)
+		f.Close()
+		s.Id = fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+		s.config.ConfigSet("serverid", s.Id)
+	}
+
+	//init cluster
 	s.cluster = &Cluster{current: s, Servers: make(map[string]*kvproto.ServerInfo)}
 	s.cluster.Init()
-	s.db = db
+
+	//init exporter and so
 	s.Exporter = make(map[string]*Exporter)
 	s.Dataset = make(map[string]*Dataset)
 	s.Importer = make(map[string]*Importer)
