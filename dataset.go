@@ -41,7 +41,8 @@ type Dataset struct {
 	Sequence    int64
 	MaxBinlog   int64
 	dbHandle    DbHandle
-	mirror      Mirror
+	//sync        chan *Data
+	mirror Mirror
 }
 
 func (ds *Dataset) Init() {
@@ -196,17 +197,18 @@ func (ds *Dataset) set(data *kvproto.Data) error {
 
 func (ds *Dataset) Set(req *kvproto.SetRequest) (*kvproto.SetReply, error) {
 	ds.mu.Lock()
+	defer ds.mu.Unlock()
 	ds.Sequence += 1
 	data := &kvproto.Data{Sequence: ds.Sequence, Key: req.Key, Value: req.Value}
 	err := ds.set(data)
-	ds.mu.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
 
 	mirror := ds.mirror
 	if mirror != nil {
 		mirror.Sync(data)
-	}
-	if err != nil {
-		return nil, err
 	}
 
 	return &kvproto.SetReply{Sequence: data.Sequence}, nil
@@ -244,7 +246,7 @@ func (ds *Dataset) Get(req *kvproto.GetRequest) (*kvproto.GetReply, error) {
 	return &kvproto.GetReply{Data: data}, nil
 }
 
-func (ds *Dataset) OnSet(key []byte) bool {
+func (ds *Dataset) OnDataset(key []byte) bool {
 	if len(key) > len(ds.Name) && bytes.Equal([]byte(ds.Name), key[:len(ds.Name)]) {
 		return true
 	}
@@ -256,7 +258,7 @@ func (ds *Dataset) Clean() error {
 		// Remember that the contents of the returned slice should not be modified, and
 		// only valid until the next call to Next.
 		key := iter.Key()
-		if !ds.OnSet(key) {
+		if !ds.OnDataset(key) {
 			break
 		}
 		ds.dbHandle().Delete(key, nil)
@@ -275,13 +277,11 @@ func (ds *Dataset) SyncTo(sequence int64, mirror Mirror) error {
 			continue
 		}
 		mirror.Sync(data)
-
 	}
 	return nil
 }
 
 func (ds *Dataset) CopyTo(sequence int64, mirror Mirror) error {
-	//ds.SetStatus(STATUS_MIGRATING)
 	ds.mirror = mirror
 	log.Printf("[%s]CopyTo [%d-%d]", ds.Name, sequence, ds.Sequence)
 	if sequence < ds.MinSequence || sequence == 0 {
@@ -292,7 +292,7 @@ func (ds *Dataset) CopyTo(sequence int64, mirror Mirror) error {
 			// Remember that the contents of the returned slice should not be modified, and
 			// only valid until the next call to Next.
 			key := iter.Key()
-			if !ds.OnSet(key) {
+			if !ds.OnDataset(key) {
 				break
 			}
 			value := iter.Value()
@@ -313,26 +313,3 @@ func (ds *Dataset) CopyTo(sequence int64, mirror Mirror) error {
 	//ds.SetStatus(STATUS_DELETING)
 	//ds.Clean()
 }
-
-//func (ds *Dataset) Migrating() error {
-//	//ds.SetStatus(STATUS_MIGRATING)
-//	ds.migrater.SetStatus(STATUS_IMPORTING)
-//	iter := ds.dbHandle().NewIterator(nil, nil)
-//	for ok := iter.Seek(ds.Name); ok; iter.Next() {
-//		// Remember that the contents of the returned slice should not be modified, and
-//		// only valid until the next call to Next.
-//		key := iter.Key()
-//		if !bytes.Equal(ds.Name, key[:len(ds.Name)]) {
-//			break
-//		}
-//		value := iter.Value()
-//		data := Data{Sequence: ds.Sequence, Key: ds.RawKey(key), Value: value}
-//		ds.migrater.Copy(data)
-//	}
-//	iter.Release()
-//	ds.migrater.SetStatus(STATUS_NODE)
-//	//ds.SetStatus(STATUS_DELETING)
-//	//ds.Clean()
-//	err := iter.Error()
-//	return err
-//}

@@ -73,17 +73,25 @@ service Cluster{
 }
 
 message SyncServerRequest {
-	map<string,int64> Dataset=1;
+	int64  DatasetTopVersion=1;
+	map<string,int64> Dataset=2;
 }
 message SyncServerReply {
-	map<string,ServerInfo> Server=1;
+  DatasetTop  Dataset=1;
+	map<string,ServerInfo> Server=2;
+}
+
+//sche server can change
+message DatasetTop {
+	int64  Version=1;
+	map<string,string> Table=2;
 }
 
 message ServerInfo {
-	string ServerId =1;
+	string Id =1;
 	int64  Version=2;
 	string Addr=3;
-	map<string,string> Dataset=4;
+	map<string,string> Dataset=4;//dataset name and flags
 }
 
 message AddServerRequest{

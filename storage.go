@@ -28,8 +28,12 @@ func GlobalDbHandle() *leveldb.DB {
 }
 
 func main() {
+
 	s1 := Server{}
 	s1.Init("s1")
+	/*for i := 0; i < 1000; i++ {
+		s1.AddDataset(fmt.Sprintf("%d-", i))
+	}*/
 	s1.AddDataset("1-")
 	s1.AddDataset("2-")
 	log.Printf("init s1")
@@ -43,8 +47,10 @@ func main() {
 	go s2.ListenAndServe("127.0.0.1:7002")
 	time.Sleep(1 * time.Second)
 	log.Printf("init mirror to")
-	s2.ImportFrom("127.0.0.1:7001")
-	s1.ImportFrom("127.0.0.1:7002")
+	s2.ImportFrom("1-", "127.0.0.1:7001")
+	s2.ImportFrom("2-", "127.0.0.1:7001")
+	s1.ImportFrom("2-", "127.0.0.1:7002")
+	s1.ImportFrom("1-", "127.0.0.1:7002")
 
 	log.Printf("set s1")
 	s1.Set(&kvproto.SetRequest{Dataset: "1-", Key: []byte("hello"), Value: []byte("world")})
@@ -63,7 +69,15 @@ func main() {
 			s1.Set(&kvproto.SetRequest{Dataset: "2-", Key: key, Value: []byte("world")})
 		}
 	}()
+	go func() {
+		for i := 0; ; i++ {
+			//s1.Set([]byte(fmt.Sprintf("key-%d", i)), []byte("world"))
+			key := []byte(fmt.Sprintf("sleep-%d", i))
+			s1.Set(&kvproto.SetRequest{Dataset: "1-", Key: key, Value: []byte("world")})
+			time.Sleep(1 * time.Second)
+		}
 
+	}()
 	time.Sleep(2 * time.Second)
 	log.Printf("get s2")
 	v, err := s2.Get(&kvproto.GetRequest{Dataset: "1-", Key: []byte("hello")})
