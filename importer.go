@@ -1,14 +1,14 @@
 package main
 
 import (
+	log "github.com/Sirupsen/logrus"
 	kvproto "github.com/humboldt-xie/hkv/proto"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
-	"time"
 
 	"fmt"
-	"log"
 	"sync"
+	"time"
 )
 
 type ClientFactory interface {
@@ -37,20 +37,20 @@ func (imp *Importer) Attach() {
 }
 
 func (imp *Importer) Run() {
-	log.Printf("importer run %s start", imp.Name)
+	log.Debugf("importer run %s start", imp.Name)
 	if imp.event != nil {
 		return
 	}
 	imp.event = make(chan bool)
 	//imp.event <- true
 	go imp.Attach()
-	log.Printf("importer run %s event", imp.Name)
+	log.Debugf("importer run %s event", imp.Name)
 	for {
 		event := true
 		if imp.IsRunning {
 			event = <-imp.event
 		}
-		log.Printf("importer run %s", imp.Name)
+		log.Debugf("importer run %s", imp.Name)
 		if !event {
 			break
 		}
@@ -73,18 +73,18 @@ func (imp *Importer) Run() {
 func (imp *Importer) Do(resp *kvproto.MirrorResponse) error {
 	set := imp.set
 	if resp.Cmd == "copy" {
-		log.Printf("copy from %s : %#v %#v", imp.client.RemoteAddr, resp.Data, set)
+		log.Debugf("copy from %s : %#v %#v", imp.client.RemoteAddr, resp.Data, set)
 		if set != nil {
 			set.Copy(resp.Data)
 		}
 	}
 	if resp.Cmd == "sync" {
-		log.Printf("sync from %s : %#v %#v", imp.client.RemoteAddr, resp.Data, set)
+		log.Debugf("sync from %s : %#v %#v", imp.client.RemoteAddr, resp.Data, set)
 		if set != nil {
 			set.Sync(resp.Data)
 		}
 	}
-	log.Printf("[%s]cmd:%s", resp.Dataset, resp.Cmd)
+	log.Debugf("[%s]cmd:%s", resp.Dataset, resp.Cmd)
 	return nil
 }
 func (imp *Importer) Stop() error {
@@ -137,7 +137,7 @@ func (im *ImporterManage) GetClient(name string) *MirrorClient {
 	im.mu.Lock()
 	defer im.mu.Unlock()
 	remote := im.RemoteAddr[name]
-	log.Printf("getclient[%s] %s", name, remote)
+	log.Debugf("getclient[%s] %s", name, remote)
 	if remote == "" {
 		return nil
 	}
@@ -175,13 +175,13 @@ func (imp *MirrorClient) Add(Name string, importer MirrorImporter, set *Dataset)
 	if err == nil {
 		imp.Importers[Name] = importer
 	}
-	log.Printf("Importer add dataset:%s", Name)
+	log.Debugf("Importer add dataset:%s", Name)
 	return err
 }
 
 func (imp *MirrorClient) Run() error {
 	if imp.IsRunning {
-		log.Printf("Importer is running %s", imp.RemoteAddr)
+		log.Debugf("Importer is running %s", imp.RemoteAddr)
 		return nil
 	}
 	imp.IsRunning = true
@@ -190,7 +190,7 @@ func (imp *MirrorClient) Run() error {
 	}()
 	conn, err := grpc.Dial(imp.RemoteAddr, grpc.WithInsecure())
 	if err != nil {
-		log.Printf("did not connect: %v", err)
+		log.Debugf("did not connect: %v", err)
 		return err
 	}
 	defer conn.Close()
@@ -207,11 +207,11 @@ func (imp *MirrorClient) Run() error {
 		if err != nil {
 			return err
 		}
-		log.Printf("mirrorclient[%s] %s %#v", imp.LocalAddr, resp.Dataset, resp.Data)
+		log.Debugf("mirrorclient[%s] %s %#v", imp.LocalAddr, resp.Dataset, resp.Data)
 		if importer, ok := imp.Importers[resp.Dataset]; ok {
 			importer.Do(resp)
 		} else {
-			log.Printf("mirrorclient[%s] %s %#v dataset not fount ", imp.LocalAddr, resp.Dataset, resp.Data)
+			log.Debugf("mirrorclient[%s] %s %#v dataset not fount ", imp.LocalAddr, resp.Dataset, resp.Data)
 
 		}
 	}

@@ -1,9 +1,45 @@
 package main
 
 import (
+	log "github.com/Sirupsen/logrus"
 	kvproto "github.com/humboldt-xie/hkv/proto"
-	"log"
+
+	"sync"
 )
+
+type ExporterManage struct {
+	mu       sync.Mutex
+	Exporter map[string]*Exporter
+	Addr     string
+}
+
+func (exp *ExporterManage) Init(config *Dataset) {
+	exp.Exporter = make(map[string]*Exporter)
+}
+func (s *ExporterManage) MakeExporter(dataset *Dataset) *Exporter {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	//mreq.Dataset["]
+	name := dataset.Name
+	if _, ok := s.Exporter[name]; !ok {
+		if _, ok := s.Exporter[name]; !ok {
+			s.Exporter[name] = &Exporter{set: dataset, Addr: s.Addr}
+		}
+	}
+	Exporter := s.Exporter[name]
+	return Exporter
+}
+
+func (s *ExporterManage) GetExporter(dataset string) *Exporter {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	//mreq.Dataset["]
+	if _, ok := s.Exporter[dataset]; !ok {
+		return nil
+	}
+	Exporter := s.Exporter[dataset]
+	return Exporter
+}
 
 type Exporter struct {
 	set          *Dataset
@@ -31,7 +67,7 @@ func (ds *Exporter) Start(req *kvproto.MirrorRequest, mirror kvproto.Mirror_Mirr
 func (ds *Exporter) CopyTo(req *kvproto.MirrorRequest, mirror kvproto.Mirror_MirrorServer) error {
 	//s.set.mirror = s
 	ds.mirror = mirror
-	log.Printf("start copy to %s->%s", ds.Addr, req.Addr)
+	log.Debugf("start copy to %s->%s", ds.Addr, req.Addr)
 	//go ds.ImportFrom(req.Addr)
 	//req.Dataset.Sequence
 	return ds.set.CopyTo(req.Dataset.Sequence, ds)
@@ -45,13 +81,13 @@ func (ds *Exporter) SetStatus(status string) error {
 }
 
 func (ds *Exporter) Copy(data *kvproto.Data) error {
-	log.Print("exporter copy[", ds.Addr, "](", data.Sequence, ")", string(data.Key), "=>", string(data.Value))
+	log.Debugf("exporter copy[", ds.Addr, "](", data.Sequence, ")", string(data.Key), "=>", string(data.Value))
 	ds.LastSequence = data.Sequence
 	return ds.mirror.Send(&kvproto.MirrorResponse{Dataset: ds.set.Name, Cmd: "copy", Data: data})
 }
 
 func (ds *Exporter) Sync(data *kvproto.Data) error {
-	log.Print("exporter sync[", ds.Addr, "](", data.Sequence, ")", string(data.Key), "=>", string(data.Value))
+	log.Debugf("exporter sync[", ds.Addr, "](", data.Sequence, ")", string(data.Key), "=>", string(data.Value))
 	ds.LastSequence = data.Sequence
 	return ds.mirror.Send(&kvproto.MirrorResponse{Dataset: ds.set.Name, Cmd: "sync", Data: data})
 }
