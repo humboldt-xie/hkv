@@ -3,13 +3,13 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"math"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/golang/protobuf/proto"
 	kvproto "github.com/humboldt-xie/hkv/proto"
 	"github.com/syndtr/goleveldb/leveldb"
@@ -53,7 +53,7 @@ func (ds *Dataset) Init() {
 	ds.Sequence = data.Sequence
 	first, err := ds.FirstBinlog()
 	if err != nil {
-		log.Printf("[%s]get first binlog error:%s", ds.Name, err)
+		log.Debugf("[%s]get first binlog error:%s", ds.Name, err)
 	}
 	ds.MinSequence = first.Sequence
 	go ds.deleteBinlogBackend()
@@ -134,7 +134,7 @@ func (ds *Dataset) GetBinlog(sequence int64) (*kvproto.Data, error) {
 func (ds *Dataset) addBinlog(batch *leveldb.Batch, data *kvproto.Data) ([]byte, error) {
 	bytes, err := proto.Marshal(data)
 	if err != nil {
-		log.Printf("marshaling error: ", err)
+		log.Debugf("marshaling error: ", err)
 		return nil, err
 	}
 	binlogkey := ds.Key("b", []byte(Sequence2str(data.Sequence)))
@@ -150,7 +150,7 @@ func (ds *Dataset) SetStatus(status string) error {
 }
 
 func (ds *Dataset) Copy(data *kvproto.Data) error {
-	log.Printf("copy %s", string(ds.Key("d", data.Key)))
+	log.Debugf("copy %s", string(ds.Key("d", data.Key)))
 	if data.Sequence <= ds.Sequence {
 		//TODO merge data
 		return nil
@@ -268,11 +268,11 @@ func (ds *Dataset) Clean() error {
 
 // sync binlog to
 func (ds *Dataset) SyncTo(sequence int64, mirror Mirror) error {
-	log.Printf("[%s]SyncTo [%d-%d]", ds.Name, sequence, ds.Sequence)
+	log.Debugf("[%s]SyncTo [%d-%d]", ds.Name, sequence, ds.Sequence)
 	for ; sequence <= ds.Sequence; sequence++ {
 		data, err := ds.GetBinlog(sequence)
 		if err != nil {
-			log.Printf("[%s] get binlog[%d] error:%s", ds.Name, sequence, err)
+			log.Debugf("[%s] get binlog[%d] error:%s", ds.Name, sequence, err)
 			//TODO fix read binlog error
 			continue
 		}
@@ -283,7 +283,7 @@ func (ds *Dataset) SyncTo(sequence int64, mirror Mirror) error {
 
 func (ds *Dataset) CopyTo(sequence int64, mirror Mirror) error {
 	ds.mirror = mirror
-	log.Printf("[%s]CopyTo [%d-%d]", ds.Name, sequence, ds.Sequence)
+	log.Debugf("[%s]CopyTo [%d-%d]", ds.Name, sequence, ds.Sequence)
 	if sequence < ds.MinSequence || sequence == 0 {
 		ds.mirror.SetStatus(STATUS_IMPORTING)
 		iter := ds.dbHandle().NewIterator(nil, nil)
@@ -299,7 +299,7 @@ func (ds *Dataset) CopyTo(sequence int64, mirror Mirror) error {
 			data := &kvproto.Data{}
 			err := proto.Unmarshal(value, data)
 			if err != nil {
-				log.Printf("data error:%s %s", string(key), err)
+				log.Debugf("data error:%s %s", string(key), err)
 			}
 
 			ds.mirror.Copy(data)

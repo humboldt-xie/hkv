@@ -1,14 +1,15 @@
 package main
 
 import (
+	log "github.com/Sirupsen/logrus"
 	kvproto "github.com/humboldt-xie/hkv/proto"
 	"github.com/syndtr/goleveldb/leveldb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"gopkg.in/yaml.v2"
 
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"sync"
@@ -22,9 +23,9 @@ type Server struct {
 	Id       string
 	Addr     string
 	DBName   string
-	Exporter map[string]*Exporter
 	Dataset  map[string]*Dataset
 	Importer ImporterManage
+	Exporter ExporterManage
 	//private
 	config  *Dataset
 	db      *leveldb.DB
@@ -61,9 +62,10 @@ func (s *Server) Init(DBName string) {
 	s.cluster.Init()
 
 	//init exporter and so
-	s.Exporter = make(map[string]*Exporter)
 	s.Dataset = make(map[string]*Dataset)
 	//s.Importer = make(map[string]*Importer)
+	s.Exporter.Init(s.config)
+
 	s.Importer.Addr = s.Addr
 	s.Importer.Init(s.config)
 }
@@ -74,6 +76,7 @@ func (s *Server) DbHandle() *leveldb.DB {
 func (s *Server) ListenAndServe(addr string) {
 	s.Addr = addr
 	s.Importer.Addr = s.Addr
+	s.Exporter.Addr = s.Addr
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
@@ -101,25 +104,6 @@ func (s *Server) getDataset(Name string) *Dataset {
 		return ds
 	}
 	return nil
-}
-
-func (s *Server) getExporter(dataset string) *Exporter {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	//mreq.Dataset["]
-	if _, ok := s.Exporter[dataset]; !ok {
-		s.mu.Unlock()
-		ds := s.getDataset(dataset)
-		s.mu.Lock()
-		if ds == nil {
-			return nil
-		}
-		if _, ok := s.Exporter[dataset]; !ok {
-			s.Exporter[dataset] = &Exporter{set: ds, Addr: s.Addr}
-		}
-	}
-	Exporter := s.Exporter[dataset]
-	return Exporter
 }
 
 func (s *Server) Set(req *kvproto.SetRequest) (*kvproto.SetReply, error) {
@@ -155,16 +139,25 @@ func (s *Server) ImportFrom(dataset string, addr string) error {
 
 // mirror server
 func (s *Server) Mirror(mirror kvproto.Mirror_MirrorServer) error {
+	md, _ := metadata.FromContext(mirror.Context())
+	log.Debugf("mirror context :%#v", md)
 	for {
 		request, err := mirror.Recv()
 		if err != nil {
 			panic(err)
 			return err
 		}
-		exporter := s.getExporter(request.Dataset.Name)
+		dataset := s.getDataset(request.Dataset.Name)
+		if dataset == nil {
+			//TODO fix error
+			log.Debugf("not found exporter :%s", request.Dataset.Name)
+			continue
+		}
+
+		exporter := s.Exporter.MakeExporter(dataset)
 		if exporter == nil {
 			//TODO fix error
-			log.Printf("not found exporter :%s", request.Dataset.Name)
+			log.Debugf("not found exporter :%s", request.Dataset.Name)
 			continue
 		}
 		go exporter.Start(request, mirror)

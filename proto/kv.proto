@@ -57,9 +57,9 @@ message MirrorRequest {
 message MirrorResponse {
 	string   Cmd =1;
 	string   Dataset=2;
-	repeated string Args=3;
+	int64    LastSequence=3;
 	Data     Data =4;
-
+	repeated string Args=5;
 }
 
 
