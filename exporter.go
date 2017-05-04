@@ -64,7 +64,7 @@ func (ds *DatasetExporter) Start(req *kvproto.MirrorRequest, mirror kvproto.Mirr
 		ds.IsRunning = false
 	}()
 	ds.mirror = mirror
-	ds.mirror.Send(&kvproto.MirrorResponse{Dataset: ds.set.Name, Cmd: "start_copy", Data: nil})
+	//ds.mirror.Send(&kvproto.MirrorResponse{Dataset: ds.set.Name, Cmd: "start_copy", Data: nil})
 	return ds.CopyTo(req, mirror)
 
 }
@@ -73,15 +73,37 @@ func (ds *DatasetExporter) CopyTo(req *kvproto.MirrorRequest, mirror kvproto.Mir
 	//s.set.mirror = s
 	ds.mirror = mirror
 	log.Debugf("start copy to %s->%s", ds.Addr, req.Addr)
+	ds.LastSequence = req.Dataset.Sequence
+	//ds.Name = req.Dataset.Name
 	//go ds.ImportFrom(req.Addr)
 	//req.Dataset.Sequence
-	return ds.set.CopyTo(req.Dataset.Sequence, ds)
+	return ds.set.Start(req.Dataset.Name, ds)
 }
 
-func (ds *DatasetExporter) SetStatus(status string) error {
-	//ds.Status = status
-	//ds.mirror.
-	ds.Status = status
+func (ds *DatasetExporter) Name() string {
+	return ds.set.Name
+}
+func (ds *DatasetExporter) Sequence() int64 {
+	return ds.LastSequence
+}
+func (ds *DatasetExporter) StartCopy() error {
+	//TODO start copy
+	return nil
+}
+func (ds *DatasetExporter) EndCopy() error {
+	//TODO end copy
+	return nil
+}
+func (ds *DatasetExporter) StartSync() error {
+	//TODO start sync
+	return nil
+}
+func (ds *DatasetExporter) EndSync() error {
+	//TODO end sync
+	return nil
+}
+func (ds *DatasetExporter) Stop() error {
+	//TODO stopk
 	return nil
 }
 

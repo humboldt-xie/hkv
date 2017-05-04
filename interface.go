@@ -1,5 +1,6 @@
 package main
 
+/*
 import (
 	kvproto "github.com/humboldt-xie/hkv/proto"
 )
@@ -9,3 +10,4 @@ type Mirror interface {
 	Copy(*kvproto.Data) error
 	Sync(*kvproto.Data) error
 }
+*/

@@ -41,8 +41,7 @@ type Dataset struct {
 	Sequence    int64
 	MaxBinlog   int64
 	dbHandle    DbHandle
-	//sync        chan *Data
-	mirror Mirror
+	importer    Importer
 }
 
 func (ds *Dataset) Init() {
@@ -156,9 +155,9 @@ func (ds *Dataset) Copy(data *kvproto.Data) error {
 		return nil
 	}
 	err := ds.set(data)
-	mirror := ds.mirror
-	if mirror != nil {
-		mirror.Copy(data)
+	importer := ds.importer
+	if importer != nil {
+		importer.Copy(data)
 	}
 	return err
 
@@ -175,9 +174,9 @@ func (ds *Dataset) Sync(data *kvproto.Data) error {
 		return err
 	}
 	ds.Sequence = data.Sequence
-	mirror := ds.mirror
-	if mirror != nil {
-		mirror.Sync(data)
+	importer := ds.importer
+	if importer != nil {
+		importer.Sync(data)
 	}
 	return err
 	//return ds.dbHandle().Put(ds.Key("d", data.Key), data.Value, nil)
@@ -206,9 +205,9 @@ func (ds *Dataset) Set(req *kvproto.SetRequest) (*kvproto.SetReply, error) {
 		return nil, err
 	}
 
-	mirror := ds.mirror
-	if mirror != nil {
-		mirror.Sync(data)
+	importer := ds.importer
+	if importer != nil {
+		importer.Sync(data)
 	}
 
 	return &kvproto.SetReply{Sequence: data.Sequence}, nil
@@ -267,7 +266,7 @@ func (ds *Dataset) Clean() error {
 }
 
 // sync binlog to
-func (ds *Dataset) SyncTo(sequence int64, mirror Mirror) error {
+func (ds *Dataset) SyncTo(sequence int64, importer Importer) error {
 	log.Debugf("[%s]SyncTo [%d-%d]", ds.Name, sequence, ds.Sequence)
 	for ; sequence <= ds.Sequence; sequence++ {
 		data, err := ds.GetBinlog(sequence)
@@ -276,16 +275,23 @@ func (ds *Dataset) SyncTo(sequence int64, mirror Mirror) error {
 			//TODO fix read binlog error
 			continue
 		}
-		mirror.Sync(data)
+		importer.Sync(data)
 	}
 	return nil
 }
 
-func (ds *Dataset) CopyTo(sequence int64, mirror Mirror) error {
-	ds.mirror = mirror
+// Start impl exporter
+func (ds *Dataset) Start(name string, importer Importer) error {
+	ds.importer = importer
+	return ds.CopyTo(importer.Sequence(), importer)
+}
+
+func (ds *Dataset) CopyTo(sequence int64, importer Importer) error {
+	//ds.mirror = mirror
 	log.Debugf("[%s]CopyTo [%d-%d]", ds.Name, sequence, ds.Sequence)
 	if sequence < ds.MinSequence || sequence == 0 {
-		ds.mirror.SetStatus(STATUS_IMPORTING)
+		//ds.mirror.SetStatus(STATUS_IMPORTING)
+		importer.StartCopy()
 		iter := ds.dbHandle().NewIterator(nil, nil)
 		for ok := iter.Seek(ds.Key("d", []byte{})); ok; iter.Next() {
 
@@ -302,14 +308,12 @@ func (ds *Dataset) CopyTo(sequence int64, mirror Mirror) error {
 				log.Debugf("data error:%s %s", string(key), err)
 			}
 
-			ds.mirror.Copy(data)
+			importer.Copy(data)
 		}
 		iter.Release()
-		ds.mirror.SetStatus(STATUS_NODE)
+		importer.EndCopy()
 		err := iter.Error()
 		return err
 	}
-	return ds.SyncTo(sequence, mirror)
-	//ds.SetStatus(STATUS_DELETING)
-	//ds.Clean()
+	return ds.SyncTo(sequence, importer)
 }
