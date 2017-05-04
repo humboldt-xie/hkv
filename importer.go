@@ -25,14 +25,10 @@ type Importer interface {
 	Stop() error
 }
 
-type ImporterStarter interface {
-	Start(name string, importer Importer) error
-}
-
 type DatasetImporter struct {
 	IsRunning bool
 	set       *Dataset
-	starter   ImporterStarter
+	exporter  Exporter
 	event     chan bool
 }
 
@@ -62,7 +58,7 @@ func (imp *DatasetImporter) Run() {
 			break
 		}
 		imp.IsRunning = true
-		err := imp.starter.Start(imp.Name(), imp)
+		err := imp.exporter.Start(imp.Name(), imp)
 		if err != nil {
 			imp.IsRunning = false
 			log.Printf("[%s]start importer error:%s", imp.Name(), err)
@@ -147,7 +143,7 @@ func (im *ImporterManage) newImporter(dataset *Dataset) *DatasetImporter {
 	//mreq.Dataset["]
 	name := dataset.Name
 	if _, ok := im.Importer[name]; !ok {
-		im.Importer[name] = &DatasetImporter{starter: im, set: dataset}
+		im.Importer[name] = &DatasetImporter{exporter: im, set: dataset}
 		go im.Importer[name].Run()
 	}
 	return im.Importer[name]

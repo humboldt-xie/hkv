@@ -7,30 +7,35 @@ import (
 	"sync"
 )
 
+type Exporter interface {
+	Start(name string, importer Importer) error
+}
+
 type ExporterManage struct {
 	mu       sync.Mutex
-	Exporter map[string]*Exporter
+	Exporter map[string]*DatasetExporter
 	Addr     string
 }
 
 func (exp *ExporterManage) Init(config *Dataset) {
-	exp.Exporter = make(map[string]*Exporter)
+	exp.Exporter = make(map[string]*DatasetExporter)
 }
-func (s *ExporterManage) MakeExporter(dataset *Dataset) *Exporter {
+func (s *ExporterManage) MakeExporter(dataset *Dataset) *DatasetExporter {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	//mreq.Dataset["]
 	name := dataset.Name
 	if _, ok := s.Exporter[name]; !ok {
 		if _, ok := s.Exporter[name]; !ok {
-			s.Exporter[name] = &Exporter{set: dataset, Addr: s.Addr}
+			s.Exporter[name] = &DatasetExporter{set: dataset, Addr: s.Addr}
 		}
 	}
 	Exporter := s.Exporter[name]
+
 	return Exporter
 }
 
-func (s *ExporterManage) GetExporter(dataset string) *Exporter {
+func (s *ExporterManage) GetExporter(dataset string) *DatasetExporter {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	//mreq.Dataset["]
@@ -41,7 +46,7 @@ func (s *ExporterManage) GetExporter(dataset string) *Exporter {
 	return Exporter
 }
 
-type Exporter struct {
+type DatasetExporter struct {
 	set          *Dataset
 	IsRunning    bool
 	Addr         string
@@ -50,7 +55,7 @@ type Exporter struct {
 	mirror       kvproto.Mirror_MirrorServer
 }
 
-func (ds *Exporter) Start(req *kvproto.MirrorRequest, mirror kvproto.Mirror_MirrorServer) error {
+func (ds *DatasetExporter) Start(req *kvproto.MirrorRequest, mirror kvproto.Mirror_MirrorServer) error {
 	if ds.IsRunning {
 		return nil
 	}
@@ -64,7 +69,7 @@ func (ds *Exporter) Start(req *kvproto.MirrorRequest, mirror kvproto.Mirror_Mirr
 
 }
 
-func (ds *Exporter) CopyTo(req *kvproto.MirrorRequest, mirror kvproto.Mirror_MirrorServer) error {
+func (ds *DatasetExporter) CopyTo(req *kvproto.MirrorRequest, mirror kvproto.Mirror_MirrorServer) error {
 	//s.set.mirror = s
 	ds.mirror = mirror
 	log.Debugf("start copy to %s->%s", ds.Addr, req.Addr)
@@ -73,20 +78,20 @@ func (ds *Exporter) CopyTo(req *kvproto.MirrorRequest, mirror kvproto.Mirror_Mir
 	return ds.set.CopyTo(req.Dataset.Sequence, ds)
 }
 
-func (ds *Exporter) SetStatus(status string) error {
+func (ds *DatasetExporter) SetStatus(status string) error {
 	//ds.Status = status
 	//ds.mirror.
 	ds.Status = status
 	return nil
 }
 
-func (ds *Exporter) Copy(data *kvproto.Data) error {
+func (ds *DatasetExporter) Copy(data *kvproto.Data) error {
 	log.Debugf("exporter copy[", ds.Addr, "](", data.Sequence, ")", string(data.Key), "=>", string(data.Value))
 	ds.LastSequence = data.Sequence
 	return ds.mirror.Send(&kvproto.MirrorResponse{Dataset: ds.set.Name, Cmd: "copy", Data: data})
 }
 
-func (ds *Exporter) Sync(data *kvproto.Data) error {
+func (ds *DatasetExporter) Sync(data *kvproto.Data) error {
 	log.Debugf("exporter sync[", ds.Addr, "](", data.Sequence, ")", string(data.Key), "=>", string(data.Value))
 	ds.LastSequence = data.Sequence
 	return ds.mirror.Send(&kvproto.MirrorResponse{Dataset: ds.set.Name, Cmd: "sync", Data: data})

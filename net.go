@@ -29,7 +29,7 @@ type Server struct {
 	//private
 	config  *Dataset
 	db      *leveldb.DB
-	cluster *Cluster
+	cluster *ClusterServer
 	mu      sync.Mutex
 }
 
@@ -58,7 +58,7 @@ func (s *Server) Init(DBName string) {
 	}
 
 	//init cluster
-	s.cluster = &Cluster{current: s}
+	s.cluster = &ClusterServer{current: s}
 	s.cluster.Init()
 
 	//init exporter and so
