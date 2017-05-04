@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	kvproto "github.com/humboldt-xie/hkv/proto"
 )
 
 func TestNode(t *testing.T) {
@@ -16,9 +18,10 @@ func TestNode(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	//go s2.MirrorTo("127.0.0.1:7001")
 
-	s1.Set([]byte("hello"), []byte("world"))
+	s1.Set(&kvproto.SetRequest{Dataset: "1-", Key: []byte("hello"), Value: []byte("world")})
+
 	time.Sleep(1 * time.Second)
-	t.Fatal(s2.Get([]byte("hello")))
+	t.Fatal(s2.Get(&kvproto.GetRequest{Dataset: "1-", Key: []byte("hello")}))
 
 	//time.Sleep(2 * time.Second)
 }

@@ -1,6 +1,6 @@
-集群操作
+## 数据同步
 
-Mirror 构建镜像 分Copy 和 Sync 
+Mirror 构建镜像 分Copy 和 Sync
 Move(dataset, source superset,target superset) 数据集在超级直接移动
 
 定义。去SuperSet 是数据节点，作为replica 的最小单元
@@ -19,7 +19,7 @@ superset之间打通数据通道，不同的superset 只需要建立一条数据
 
 dataset 实现接口:mirror(exporter importer)     kv
 
-superset    CopyAndSync(stream)  拷贝以及同步数据。 请求发送所有dataset 的名字以及binlog sequence 。 superset 通过这些信息，决定是copy 还是 sync 
+superset    CopyAndSync(stream)  拷贝以及同步数据。 请求发送所有dataset 的名字以及binlog sequence 。 superset 通过这些信息，决定是copy 还是 sync
 
 
 一致性。一致性同步采用binlog 方式，从主拉取一次拷贝，再由binlog 同步更新。
@@ -27,6 +27,7 @@ superset    CopyAndSync(stream)  拷贝以及同步数据。 请求发送所有d
 状态有 本机状态  拷贝状态   镜像状态
 
 复制为0 时，状态为本机状态
+
 当开始复制，为复制状态(复制状态不可中断，中断需要重新拷贝
 
 
@@ -37,5 +38,3 @@ superset    CopyAndSync(stream)  拷贝以及同步数据。 请求发送所有d
 
 
 基于slot 的merkle tree.用于对数据
-
-

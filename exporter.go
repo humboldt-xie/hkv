@@ -1,8 +1,9 @@
 package main
 
 import (
-	kvproto "github.com/humboldt-xie/hkv/proto"
 	"log"
+
+	kvproto "github.com/humboldt-xie/hkv/proto"
 )
 
 type Exporter struct {

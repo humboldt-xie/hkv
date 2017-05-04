@@ -1,8 +1,9 @@
 package main
 
 import (
-	hkv "github.com/humboldt-xie/hkv/proto"
 	"testing"
+
+	kvproto "github.com/humboldt-xie/hkv/proto"
 )
 
 type LocalDatasetMigrater struct {
@@ -21,7 +22,7 @@ func (ds *LocalDatasetMigrater) SetStatus(status string) error {
 	//return nil
 }
 
-func (ds *LocalDatasetMigrater) Copy(data hkv.Data) error {
+func (ds *LocalDatasetMigrater) Copy(data *kvproto.Data) error {
 	ds.lastkey = string(data.Key)
 	ds.t.Log("copy[", ds.lastkey, "](", data.Sequence, ")", string(data.Key), string(data.Value))
 	if ds.other == nil {
@@ -31,7 +32,7 @@ func (ds *LocalDatasetMigrater) Copy(data hkv.Data) error {
 	//return nil //DB.Put(data.Key, data.Value)
 }
 
-func (ds *LocalDatasetMigrater) Sync(data hkv.Data) error {
+func (ds *LocalDatasetMigrater) Sync(data *kvproto.Data) error {
 	ds.t.Log("sync[", ds.lastkey, "](", data.Sequence, ")", string(data.Key), string(data.Value))
 	if ds.other == nil {
 		return nil
@@ -42,19 +43,20 @@ func (ds *LocalDatasetMigrater) Sync(data hkv.Data) error {
 
 func TestSlot(t *testing.T) {
 	p := &LocalDatasetMigrater{Name: "other", t: t}
-	other := Dataset{DbHandle: GlobalDbHandle, Name: "other-", Status: "node"}
+	other := Dataset{dbHandle: GlobalDbHandle, Name: "other-", Status: "node"}
 	other.Clean()
 	other.CopyTo(0, p)
 
-	ds := Dataset{DbHandle: GlobalDbHandle, Name: "test-", Status: "node"}
+	ds := Dataset{dbHandle: GlobalDbHandle, Name: "test-", Status: "node"}
 	ds.Init()
-	ds.Set([]byte("hello"), []byte("world"))
-	ds.Set([]byte("hello2"), []byte("world2"))
-	ds.CopyTo(0, &LocalDatasetMigrater{t: t, other: &other})
-	ds.Set([]byte("hello1"), []byte("world1"))
-	ds.Set([]byte("hello"), []byte("world-second"))
+	ds.Set(&kvproto.SetRequest{Dataset: "test-", Key: []byte("hello"), Value: []byte("world")})
+	ds.Set(&kvproto.SetRequest{Dataset: "test-", Key: []byte("hello2"), Value: []byte("world2")})
 
-	//other.migrater = &printer{t: t}
+	ds.CopyTo(0, &LocalDatasetMigrater{t: t, other: &other})
+
+	ds.Set(&kvproto.SetRequest{Dataset: "test-", Key: []byte("hello1"), Value: []byte("world1")})
+	ds.Set(&kvproto.SetRequest{Dataset: "test-", Key: []byte("hello"), Value: []byte("world-second")})
+
 	other.CopyTo(0, p)
 
 	data, err := ds.LastBinlog()

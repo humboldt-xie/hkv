@@ -1,42 +1,48 @@
 package main
 
 import (
+	"time"
+
 	kvproto "github.com/humboldt-xie/hkv/proto"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
-	"time"
 
 	"fmt"
 	"log"
 	"sync"
 )
 
-type ClientFactory interface {
-	GetClient(name string) *MirrorClient
-}
-
-type MirrorImporter interface {
-	Do(resp *kvproto.MirrorResponse) error
+type Importer interface {
+	Dataset() *Dataset
+	StartCopy() error
+	EndCopy() error
+	StartSync() error
+	EndSync() error
+	Copy(*kvproto.Data) error
+	Sync(*kvproto.Data) error
 	Stop() error
 }
 
-type Importer struct {
-	Name          string
-	IsRunning     bool
-	set           *Dataset
-	clientFactory ClientFactory
-	client        *MirrorClient
-	event         chan bool
+type ImporterStarter interface {
+	Start(name string, importer Importer) error
 }
 
-func (imp *Importer) Attach() {
+type DatasetImporter struct {
+	Name      string
+	IsRunning bool
+	set       *Dataset
+	starter   ImporterStarter
+	event     chan bool
+}
+
+func (imp *DatasetImporter) Attach() {
 	select {
 	case imp.event <- true:
 	default:
 	}
 }
 
-func (imp *Importer) Run() {
+func (imp *DatasetImporter) Run() {
 	log.Printf("importer run %s start", imp.Name)
 	if imp.event != nil {
 		return
@@ -54,23 +60,47 @@ func (imp *Importer) Run() {
 		if !event {
 			break
 		}
-		client := imp.clientFactory.GetClient(imp.set.Name)
-		if client == nil {
-			time.Sleep(time.Second)
-			continue
-		}
 		imp.IsRunning = true
-		imp.client = client
-		err := client.Add(imp.set.Name, imp, imp.set)
+		err := imp.starter.Start(imp.Name, imp)
 		if err != nil {
 			imp.IsRunning = false
+			log.Printf("[%s]start importer error:%s", imp.Name, err)
 		}
+
 		time.Sleep(time.Second)
 	}
 
 }
 
-func (imp *Importer) Do(resp *kvproto.MirrorResponse) error {
+func (imp *DatasetImporter) Dataset() *Dataset {
+	return imp.set
+}
+func (imp *DatasetImporter) StartCopy() error {
+	//TODO start copy
+	return nil
+}
+func (imp *DatasetImporter) EndCopy() error {
+	//TODO end copy
+	return nil
+}
+func (imp *DatasetImporter) StartSync() error {
+	//TODO start sync
+	return nil
+}
+func (imp *DatasetImporter) EndSync() error {
+	//TODO end sync
+	return nil
+}
+
+func (imp *DatasetImporter) Copy(data *kvproto.Data) error {
+	return imp.set.Copy(data)
+}
+
+func (imp *DatasetImporter) Sync(data *kvproto.Data) error {
+	return imp.set.Sync(data)
+}
+
+/*func (imp *DatasetImporter) Do(resp *kvproto.MirrorResponse) error {
 	set := imp.set
 	if resp.Cmd == "copy" {
 		log.Printf("copy from %s : %#v %#v", imp.client.RemoteAddr, resp.Data, set)
@@ -86,8 +116,8 @@ func (imp *Importer) Do(resp *kvproto.MirrorResponse) error {
 	}
 	log.Printf("[%s]cmd:%s", resp.Dataset, resp.Cmd)
 	return nil
-}
-func (imp *Importer) Stop() error {
+}*/
+func (imp *DatasetImporter) Stop() error {
 	imp.IsRunning = false
 	return nil
 }
@@ -96,28 +126,28 @@ type ImporterManage struct {
 	mu         sync.Mutex
 	RemoteAddr map[string]string
 	Clients    map[string]*MirrorClient
-	Importer   map[string]*Importer
+	Importer   map[string]*DatasetImporter
 	Addr       string
 }
 
 func (im *ImporterManage) Init(config *Dataset) {
 	im.RemoteAddr = make(map[string]string)
 	im.Clients = make(map[string]*MirrorClient)
-	im.Importer = make(map[string]*Importer)
+	im.Importer = make(map[string]*DatasetImporter)
 }
-func (im *ImporterManage) newImporter(dataset *Dataset) *Importer {
+func (im *ImporterManage) newImporter(dataset *Dataset) *DatasetImporter {
 	im.mu.Lock()
 	defer im.mu.Unlock()
 	//mreq.Dataset["]
 	name := dataset.Name
 	if _, ok := im.Importer[name]; !ok {
-		im.Importer[name] = &Importer{Name: name, clientFactory: im, set: dataset}
+		im.Importer[name] = &DatasetImporter{Name: name, starter: im, set: dataset}
 		go im.Importer[name].Run()
 	}
 	return im.Importer[name]
 }
 
-func (im *ImporterManage) getImporter(name string) *Importer {
+func (im *ImporterManage) getImporter(name string) *DatasetImporter {
 	im.mu.Lock()
 	defer im.mu.Unlock()
 	//mreq.Dataset["]
@@ -130,6 +160,17 @@ func (im *ImporterManage) getImporter(name string) *Importer {
 func (im *ImporterManage) Import(dataset *Dataset, addr string) error {
 	im.RemoteAddr[dataset.Name] = addr
 	im.newImporter(dataset).Attach()
+	return nil
+}
+func (im *ImporterManage) Start(name string, importer Importer) error {
+	client := im.GetClient(name)
+	if client == nil {
+		return fmt.Errorf("client not found")
+	}
+	err := client.Add(name, importer)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -155,20 +196,21 @@ type MirrorClient struct {
 	mu sync.Mutex
 	//Dataset    map[string]*Dataset
 	client     kvproto.Mirror_MirrorClient
-	Importers  map[string]MirrorImporter
+	Importers  map[string]Importer
 	IsRunning  bool
 	LocalAddr  string
 	RemoteAddr string
 }
 
 func (imp *MirrorClient) Init() {
-	imp.Importers = make(map[string]MirrorImporter)
+	imp.Importers = make(map[string]Importer)
 }
 
-func (imp *MirrorClient) Add(Name string, importer MirrorImporter, set *Dataset) error {
+func (imp *MirrorClient) Add(Name string, importer Importer) error {
 	imp.mu.Lock()
 	defer imp.mu.Unlock()
-	if imp.client == nil {
+	set := importer.Dataset()
+	if imp.client == nil || !imp.IsRunning {
 		return fmt.Errorf("client %s not running", imp.RemoteAddr)
 	}
 	err := imp.client.Send(&kvproto.MirrorRequest{Cmd: "mirror", Addr: imp.LocalAddr, Dataset: &kvproto.Dataset{Name: string(set.Name), Sequence: set.Sequence}})
@@ -209,7 +251,16 @@ func (imp *MirrorClient) Run() error {
 		}
 		log.Printf("mirrorclient[%s] %s %#v", imp.LocalAddr, resp.Dataset, resp.Data)
 		if importer, ok := imp.Importers[resp.Dataset]; ok {
-			importer.Do(resp)
+			switch resp.Cmd {
+			case "copy":
+				importer.Copy(resp.Data)
+			case "sync":
+				importer.Sync(resp.Data)
+			default:
+				log.Printf("mirrorclient[%s] unkown cmd %s %#v", imp.LocalAddr, resp.Dataset, resp.Cmd)
+
+			}
+			//importer.Do(resp)
 		} else {
 			log.Printf("mirrorclient[%s] %s %#v dataset not fount ", imp.LocalAddr, resp.Dataset, resp.Data)
 
