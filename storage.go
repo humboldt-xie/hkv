@@ -43,7 +43,7 @@ func main() {
 		servers = append(servers, s)
 		for j := 0; j < count; j++ {
 			if i != j {
-				addr := "127.0.0.1:" + fmt.Sprintf("700%d", i)
+				addr := "127.0.0.1:" + fmt.Sprintf("700%d", j)
 				servers[i].ImportFrom("1-", addr)
 				servers[i].ImportFrom("2-", addr)
 			}
