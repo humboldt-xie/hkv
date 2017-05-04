@@ -11,8 +11,11 @@ import (
 	"time"
 )
 
+//Importer 是数据导入接口与Exporter 一一对应
+//
 type Importer interface {
-	Dataset() *Dataset
+	Name() string
+	Sequence() int64
 	StartCopy() error
 	EndCopy() error
 	StartSync() error
@@ -27,7 +30,6 @@ type ImporterStarter interface {
 }
 
 type DatasetImporter struct {
-	Name      string
 	IsRunning bool
 	set       *Dataset
 	starter   ImporterStarter
@@ -60,17 +62,22 @@ func (imp *DatasetImporter) Run() {
 			break
 		}
 		imp.IsRunning = true
-		err := imp.starter.Start(imp.Name, imp)
+		err := imp.starter.Start(imp.Name(), imp)
 		if err != nil {
 			imp.IsRunning = false
-			log.Printf("[%s]start importer error:%s", imp.Name, err)
+			log.Printf("[%s]start importer error:%s", imp.Name(), err)
 		}
 
 		time.Sleep(time.Second)
 	}
 
 }
-
+func (imp *DatasetImporter) Name() string {
+	return imp.set.Name
+}
+func (imp *DatasetImporter) Sequence() int64 {
+	return imp.set.Sequence
+}
 func (imp *DatasetImporter) Dataset() *Dataset {
 	return imp.set
 }
@@ -140,7 +147,7 @@ func (im *ImporterManage) newImporter(dataset *Dataset) *DatasetImporter {
 	//mreq.Dataset["]
 	name := dataset.Name
 	if _, ok := im.Importer[name]; !ok {
-		im.Importer[name] = &DatasetImporter{Name: name, starter: im, set: dataset}
+		im.Importer[name] = &DatasetImporter{starter: im, set: dataset}
 		go im.Importer[name].Run()
 	}
 	return im.Importer[name]
@@ -208,11 +215,11 @@ func (imp *MirrorClient) Init() {
 func (imp *MirrorClient) Add(Name string, importer Importer) error {
 	imp.mu.Lock()
 	defer imp.mu.Unlock()
-	set := importer.Dataset()
+	//set := importer.Dataset()
 	if imp.client == nil || !imp.IsRunning {
 		return fmt.Errorf("client %s not running", imp.RemoteAddr)
 	}
-	err := imp.client.Send(&kvproto.MirrorRequest{Cmd: "mirror", Addr: imp.LocalAddr, Dataset: &kvproto.Dataset{Name: string(set.Name), Sequence: set.Sequence}})
+	err := imp.client.Send(&kvproto.MirrorRequest{Cmd: "mirror", Addr: imp.LocalAddr, Dataset: &kvproto.Dataset{Name: importer.Name(), Sequence: importer.Sequence()}})
 	if err == nil {
 		imp.Importers[Name] = importer
 	}
