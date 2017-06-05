@@ -74,6 +74,7 @@ func (s *Server) DbHandle() *leveldb.DB {
 }
 
 func (s *Server) ListenAndServe(addr string) {
+	log.Debugf("ListenAndServe %s", addr)
 	s.Addr = addr
 	s.Importer.Addr = s.Addr
 	s.Exporter.Addr = s.Addr

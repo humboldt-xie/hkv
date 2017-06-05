@@ -34,12 +34,13 @@ func main() {
 	count := 2
 
 	for i := 0; i < count; i++ {
-		s := &Server{}
-		s.Init(fmt.Sprintf("/data/s%d", i))
+		addr := "127.0.0.1:" + fmt.Sprintf("700%d", i)
+		s := &Server{Addr: addr}
+		s.Init(fmt.Sprintf("/tmp/data/s%d", i))
 		s.AddDataset("1-")
 		s.AddDataset("2-")
 		log.Debugf("init s[%d]", i)
-		go s.ListenAndServe("127.0.0.1:" + fmt.Sprintf("700%d", i))
+		go s.ListenAndServe(addr)
 		servers = append(servers, s)
 		for j := 0; j < count; j++ {
 			if i != j {

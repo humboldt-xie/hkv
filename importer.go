@@ -1,6 +1,8 @@
 package main
 
 import (
+	"time"
+
 	log "github.com/Sirupsen/logrus"
 	kvproto "github.com/humboldt-xie/hkv/proto"
 	"golang.org/x/net/context"
@@ -8,7 +10,6 @@ import (
 
 	"fmt"
 	"sync"
-	"time"
 )
 
 //Importer 是数据导入接口与Exporter 一一对应
@@ -26,48 +27,19 @@ type Importer interface {
 }
 
 type DatasetImporter struct {
-	IsRunning bool
-	set       *Dataset
-	exporter  Exporter
-	event     chan bool
+	IsRunning  bool
+	set        *Dataset
+	RemoteAddr string
+	LocalAddr  string
 }
 
-func (imp *DatasetImporter) Attach() {
-	select {
-	case imp.event <- true:
-	default:
-	}
+func (imp *DatasetImporter) start() {
+	imp.IsRunning = true
+}
+func (imp *DatasetImporter) stop() {
+	imp.IsRunning = false
 }
 
-func (imp *DatasetImporter) Run() {
-	log.Debugf("importer run %s start", imp.Name)
-	if imp.event != nil {
-		return
-	}
-	imp.event = make(chan bool)
-	//imp.event <- true
-	go imp.Attach()
-	log.Debugf("importer run %s event", imp.Name)
-	for {
-		event := true
-		if imp.IsRunning {
-			event = <-imp.event
-		}
-		log.Debugf("importer run %s", imp.Name)
-		if !event {
-			break
-		}
-		imp.IsRunning = true
-		err := imp.exporter.Start(imp.Name(), imp)
-		if err != nil {
-			imp.IsRunning = false
-			log.Printf("[%s]start importer error:%s", imp.Name(), err)
-		}
-
-		time.Sleep(time.Second)
-	}
-
-}
 func (imp *DatasetImporter) Name() string {
 	return imp.set.Name
 }
@@ -101,170 +73,156 @@ func (imp *DatasetImporter) Copy(data *kvproto.Data) error {
 func (imp *DatasetImporter) Sync(data *kvproto.Data) error {
 	return imp.set.Sync(data)
 }
+func (imp *DatasetImporter) Run() {
+	if imp.IsRunning {
+		return
+	}
+	imp.start()
+	defer imp.stop()
+	for {
+		imp.run()
+		time.Sleep(1 * time.Second)
+	}
+}
 
-/*func (imp *DatasetImporter) Do(resp *kvproto.MirrorResponse) error {
-	set := imp.set
-	if resp.Cmd == "copy" {
-		log.Debugf("copy from %s : %#v %#v", imp.client.RemoteAddr, resp.Data, set)
-		if set != nil {
-			set.Copy(resp.Data)
+func (imp *DatasetImporter) run() {
+	rpcClient, err := rpcPool.GetClient(imp.RemoteAddr)
+	if err != nil {
+		log.Errorf("did not connect: %v", err)
+		return
+	}
+	c := kvproto.NewMirrorClient(rpcClient.Conn)
+	client, err := c.Mirror(context.Background())
+	if err != nil {
+		log.Errorf("mirrorclient[%s] %s %s create client error", imp.LocalAddr, imp.RemoteAddr, err)
+		return
+	}
+	defer client.CloseSend()
+	err = client.Send(&kvproto.MirrorRequest{
+		Cmd:  "mirror",
+		Addr: imp.LocalAddr,
+		Dataset: &kvproto.Dataset{
+			Name:     imp.Name(),
+			Sequence: imp.Sequence(),
+		},
+	})
+	if err != nil {
+		log.Errorf("mirrorclient[%s] %s %s send error", imp.LocalAddr, imp.RemoteAddr, err)
+		return
+	}
+	for {
+		resp, err := client.Recv()
+		if err != nil {
+			log.Errorf("mirrorclient[%s] %s %s recv error", imp.LocalAddr, imp.RemoteAddr, err)
+			return
+		}
+		if imp.set.Name != resp.Dataset {
+			log.Debugf("mirrorclient[%s] %s %#v dataset not fount ", imp.LocalAddr, resp.Dataset, resp.Data)
+			return
+		}
+		log.Debugf("mirrorclient[%s]:%s %s %#v", imp.LocalAddr, resp.Cmd, resp.Dataset, resp.Data)
+		switch resp.Cmd {
+		case "copy":
+			imp.Copy(resp.Data)
+		case "sync":
+			imp.Sync(resp.Data)
+		default:
+			log.Errorf("mirrorclient[%s] unkown cmd %s %#v", imp.LocalAddr, resp.Dataset, resp.Cmd)
 		}
 	}
-	if resp.Cmd == "sync" {
-		log.Debugf("sync from %s : %#v %#v", imp.client.RemoteAddr, resp.Data, set)
-		if set != nil {
-			set.Sync(resp.Data)
-		}
-	}
-	log.Debugf("[%s]cmd:%s", resp.Dataset, resp.Cmd)
-	return nil
-}*/
+
+}
+
+//func (imp *DatasetImporter) Do(resp *kvproto.MirrorResponse) error {
+//	set := imp.set
+//	if resp.Cmd == "copy" {
+//		log.Debugf("copy from %s : %#v %#v", imp.client.RemoteAddr, resp.Data, set)
+//		if set != nil {
+//			set.Copy(resp.Data)
+//		}
+//	}
+//	if resp.Cmd == "sync" {
+//		log.Debugf("sync from %s : %#v %#v", imp.client.RemoteAddr, resp.Data, set)
+//		if set != nil {
+//			set.Sync(resp.Data)
+//		}
+//	}
+//	log.Debugf("[%s]cmd:%s", resp.Dataset, resp.Cmd)
+//	return nil
+//}
 func (imp *DatasetImporter) Stop() error {
 	imp.IsRunning = false
 	return nil
 }
 
 type ImporterManage struct {
-	mu         sync.Mutex
-	RemoteAddr map[string]string
-	Clients    map[string]*MirrorClient
-	Importer   map[string]*DatasetImporter
-	Addr       string
+	mu sync.Mutex
+	//RemoteAddr map[string]string
+	//Clients    map[string]*MirrorClient
+	Importer map[string]*DatasetImporter
+	Addr     string
 }
 
 func (im *ImporterManage) Init(config *Dataset) {
-	im.RemoteAddr = make(map[string]string)
-	im.Clients = make(map[string]*MirrorClient)
+	//im.RemoteAddr = make(map[string]string)
+	//im.Clients = make(map[string]*MirrorClient)
 	im.Importer = make(map[string]*DatasetImporter)
-}
-func (im *ImporterManage) newImporter(dataset *Dataset) *DatasetImporter {
-	im.mu.Lock()
-	defer im.mu.Unlock()
-	//mreq.Dataset["]
-	name := dataset.Name
-	if _, ok := im.Importer[name]; !ok {
-		im.Importer[name] = &DatasetImporter{exporter: im, set: dataset}
-		go im.Importer[name].Run()
-	}
-	return im.Importer[name]
-}
-
-func (im *ImporterManage) getImporter(name string) *DatasetImporter {
-	im.mu.Lock()
-	defer im.mu.Unlock()
-	//mreq.Dataset["]
-	if _, ok := im.Importer[name]; !ok {
-		return nil
-	}
-	return im.Importer[name]
 }
 
 func (im *ImporterManage) Import(dataset *Dataset, addr string) error {
-	im.RemoteAddr[dataset.Name] = addr
-	im.newImporter(dataset).Attach()
-	return nil
-}
-func (im *ImporterManage) Start(name string, importer Importer) error {
-	client := im.GetClient(name)
-	if client == nil {
-		return fmt.Errorf("client not found")
-	}
-	err := client.Add(name, importer)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (im *ImporterManage) GetClient(name string) *MirrorClient {
+	//im.RemoteAddr[dataset.Name] = addr
+	//im.newImporter(dataset).Attach()
 	im.mu.Lock()
 	defer im.mu.Unlock()
-	remote := im.RemoteAddr[name]
-	log.Debugf("getclient[%s] %s", name, remote)
-	if remote == "" {
-		return nil
+	//mreq.Dataset["]
+	name := addr + "->" + dataset.Name
+	ds, ok := im.Importer[name]
+	if !ok {
+		ds = &DatasetImporter{RemoteAddr: addr, set: dataset, LocalAddr: im.Addr}
+		im.Importer[name] = ds
 	}
-	if _, ok := im.Clients[remote]; !ok {
-		im.Clients[remote] = &MirrorClient{LocalAddr: im.Addr, RemoteAddr: remote}
-		im.Clients[remote].Init()
-		go im.Clients[remote].Run()
-	}
-	return im.Clients[remote]
+	ds.LocalAddr = im.Addr
+	go ds.Run()
+	return nil
 }
 
-//========================
-type MirrorClient struct {
-	s  *Server
-	mu sync.Mutex
-	//Dataset    map[string]*Dataset
-	client     kvproto.Mirror_MirrorClient
-	Importers  map[string]Importer
-	IsRunning  bool
-	LocalAddr  string
-	RemoteAddr string
+type RpcClient struct {
+	mu      sync.Mutex
+	Address string
+	Conn    *grpc.ClientConn
+	Error   error
 }
 
-func (imp *MirrorClient) Init() {
-	imp.Importers = make(map[string]Importer)
-}
-
-func (imp *MirrorClient) Add(Name string, importer Importer) error {
-	imp.mu.Lock()
-	defer imp.mu.Unlock()
-	//set := importer.Dataset()
-	if imp.client == nil || !imp.IsRunning {
-		return fmt.Errorf("client %s not running", imp.RemoteAddr)
-	}
-	err := imp.client.Send(&kvproto.MirrorRequest{Cmd: "mirror", Addr: imp.LocalAddr, Dataset: &kvproto.Dataset{Name: importer.Name(), Sequence: importer.Sequence()}})
-	if err == nil {
-		imp.Importers[Name] = importer
-	}
-	log.Debugf("Importer add dataset:%s", Name)
-	return err
-}
-
-func (imp *MirrorClient) Run() error {
-	if imp.IsRunning {
-		log.Debugf("Importer is running %s", imp.RemoteAddr)
-		return nil
-	}
-	imp.IsRunning = true
-	defer func() {
-		imp.IsRunning = false
-	}()
-	conn, err := grpc.Dial(imp.RemoteAddr, grpc.WithInsecure())
-	if err != nil {
-		log.Debugf("did not connect: %v", err)
-		return err
-	}
-	defer conn.Close()
-	c := kvproto.NewMirrorClient(conn)
-	imp.client, err = c.Mirror(context.Background())
-	if err != nil {
-		return err
-	}
-	/*for _, v := range imp.Dataset {
-		mirrorClient.Send(&kvproto.MirrorRequest{Cmd: "mirror", Addr: imp.LocalAddr, Dataset: &kvproto.Dataset{Name: string(v.Name), Sequence: v.Sequence}})
-	}*/
-	for {
-		resp, err := imp.client.Recv()
-		if err != nil {
-			return err
-		}
-		log.Debugf("mirrorclient[%s] %s %#v", imp.LocalAddr, resp.Dataset, resp.Data)
-		if importer, ok := imp.Importers[resp.Dataset]; ok {
-			switch resp.Cmd {
-			case "copy":
-				importer.Copy(resp.Data)
-			case "sync":
-				importer.Sync(resp.Data)
-			default:
-				log.Errorf("mirrorclient[%s] unkown cmd %s %#v", imp.LocalAddr, resp.Dataset, resp.Cmd)
-			}
-			//importer.Do(resp)
-		} else {
-			log.Debugf("mirrorclient[%s] %s %#v dataset not fount ", imp.LocalAddr, resp.Dataset, resp.Data)
-
-		}
+func (client *RpcClient) Reconnect() {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.Error != nil {
+		client.Conn, client.Error = grpc.Dial(client.Address, grpc.WithInsecure())
 	}
 }
+
+type RpcPool struct {
+	mu      sync.Mutex
+	clients map[string]*RpcClient
+}
+
+func (rpc *RpcPool) GetClient(address string) (rpcClient *RpcClient, err error) {
+	rpc.mu.Lock()
+	var ok bool
+	rpcClient, ok = rpc.clients[address]
+	if !ok {
+		rpcClient = &RpcClient{Address: address, Conn: nil, Error: fmt.Errorf("no conn %s", address)}
+		rpc.clients[address] = rpcClient
+	}
+	rpc.mu.Unlock()
+	if rpcClient.Error != nil {
+		rpcClient.Reconnect()
+	}
+	return rpcClient, rpcClient.Error
+}
+
+func NewRpcPool() *RpcPool {
+	return &RpcPool{clients: make(map[string]*RpcClient)}
+}
+
+var rpcPool = NewRpcPool()
